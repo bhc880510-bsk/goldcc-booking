@@ -150,48 +150,57 @@ class APIBookingCore:
         return {'result': 'fail', 'cookies': {}}
 
     def extract_ms_num(self):
-        """웹페이지에서 msNum 값을 동적으로 추출 (강화된 RegEx 적용)"""
-        url = "https://www.gakorea.com/reservation/golf/reservation.asp"
-        # 이전 성공 로그를 기반으로, 모바일 환경 및 추출에 필요한 헤더 사용
+        """웹페이지에서 msNum 값을 동적으로 추출 (타임아웃 15초 및 디버그 로그 강화)"""
+        target_url = "https://www.gakorea.com/reservation/golf/reservation.asp"
         headers = {
+            # User-Agent는 모바일 브라우저로 위장하여 서버가 모바일 페이지를 주도록 유도합니다.
             "User-Agent": "Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.6533.100 Mobile Safari/537.36",
             "Referer": "https://www.gakorea.com/mobile/join/login.asp",
-            "Connection": "keep-alive",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-            "Accept-Encoding": "gzip, deflate, br",
-            "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Connection": "keep-alive"
         }
+        self.log_message(f"🔎 웹 페이지 ({target_url})에서 msNum 값 추출 시도 중...")
 
+        match = None
         try:
-            self.log_message("🔎 웹 페이지에서 msNum 값 추출 시도 중... (강화된 RegEx)")
+            # 타임아웃을 15초로 증가 (네트워크 지연 대비)
+            res = self.session.get(target_url, headers=headers, timeout=15, verify=False)
 
-            # 로그인 후 확보된 세션(self.session)으로 예약 페이지 GET 요청
-            res = self.session.get(url, headers=headers, timeout=5, verify=False)
-            res.raise_for_status()
+            # --- 디버그 로그: 상태 코드 확인 ---
+            self.log_message(f"✅ 추출 페이지 응답: Status {res.status_code}")
+            if res.status_code != 200:
+                self.log_message(f"⚠️ 요청 실패: 상태 코드가 200이 아님. HTML 앞 100자: {res.text[:100]}...")
+            # ----------------------------------
 
-            # --- 강화된 정규 표현식 패턴 ---
-            # re.DOTALL을 사용하여 줄바꿈을 포함하여 검색
-            # 1. HTML hidden 필드 패턴 (가장 일반적)
-            match = re.search(r'name=["\']msNum["\'][\s\S]*?value\s*=\s*["\']?(\d+)["\']?', res.text,
-                              re.DOTALL | re.IGNORECASE)
+            # --- 강화된 정규 표현식 패턴 (3단계 검색) ---
+            # 1. HTML Hidden 필드 패턴 (가장 일반적)
+            pattern1 = r'name=["\']msNum["\']\s*value\s*=\s*["\']?(\d+)'
+            match = re.search(pattern1, res.text, re.DOTALL | re.IGNORECASE)
 
-            # 2. JavaScript 변수 할당 패턴 (대체 패턴)
+            # 2. JavaScript 변수 할당 패턴 (대체)
             if not match:
-                match = re.search(r'msNum\s*[:=]\s*["\']?(\d+)', res.text, re.IGNORECASE)
+                # msNum: '숫자', msNum = '숫자', 또는 함수 호출 인자 형태를 찾습니다.
+                pattern2 = r'msNum\s*[:=]\s*["\']?(\d{10,})'  # 10자리 이상 숫자만 타겟
+                match = re.search(pattern2, res.text, re.IGNORECASE)
+
+            # 3. 전체 HTML에서 msNum과 긴 숫자 ID 매칭 (최후의 수단)
+            if not match:
+                # 'msNum' 텍스트 뒤에 50자 이내에 있는 10자리 이상의 숫자를 찾습니다.
+                pattern3 = r'msNum[\s\S]{0,50}(\d{10,})'
+                match = re.search(pattern3, res.text, re.IGNORECASE)
 
             if match:
                 self.ms_num = match.group(1)
                 self.log_message(f"✅ msNum 추출 성공: {self.ms_num}")
                 return True
-
-            self.log_message("❌ msNum 패턴을 찾을 수 없습니다. 예약 프로세스를 중단합니다.")
-            return False
+            else:
+                self.log_message("❌ msNum 패턴을 찾을 수 없습니다. HTML 구조 변경 가능성.")
+                # --- 디버그 로그: 추출 실패 시 HTML 내용 출력 ---
+                self.log_message(f"❌ 추출 실패 HTML 내용 앞 200자: {res.text[:200]}")
+                # ------------------------------------------
+                return False
 
         except requests.RequestException as e:
-            self.log_message(f"❌ msNum 추출 중 네트워크 오류 발생: {e}. 프로세스를 중단합니다.")
-            return False
-        except Exception as e:
-            self.log_message(f"❌ msNum 추출 중 알 수 없는 오류 발생: {e}. 프로세스를 중단합니다.")
+            self.log_message(f"❌ msNum 추출 오류: 네트워크 요청 실패/타임아웃 ({e})")
             return False
 
     def keep_session_alive(self, target_dt):
