@@ -114,11 +114,11 @@ class APIBookingCore:
         self.log_message_func(msg, self.message_queue)
 
     def requests_login(self, usrid, usrpass, max_retries=3):
-        """순수 requests를 이용한 API 로그인 시도"""
+        """순수 requests를 이용한 API 로그인 시도 및 msNum 추출 시도"""
         login_url = "https://www.gakorea.com/controller/MemberController.asp"
         headers = {
-            # 원본 코드 유지
-            "User-Agent": "Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Mobile Safari/537.36",
+            # 기존 코드 유지 (User-Agent는 모바일로 변경)
+            "User-Agent": "Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.6533.100 Mobile Safari/537.36",
             "Referer": "https://www.gakorea.com/mobile/join/login.asp",
             "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
             "X-Requested-With": "XMLHttpRequest"
@@ -131,14 +131,35 @@ class APIBookingCore:
             if self.stop_event.is_set(): return {'result': 'fail', 'cookies': {}}
             try:
                 self.log_message(f"🔄 API 로그인 시도 중... (시도 {attempt + 1}/{max_retries})")
-                res = self.session.post(login_url, headers=headers, data=payload, timeout=10, verify=False,
-                                        allow_redirects=False)
 
+                # allow_redirects=True로 변경: 리다이렉트 응답을 따라가 최종 HTML에서 msNum을 찾도록 시도
+                res = self.session.post(login_url, headers=headers, data=payload, timeout=10, verify=False,
+                                        allow_redirects=True)
+
+                res.raise_for_status()  # HTTP 오류가 발생하면 예외 발생
                 cookies = dict(self.session.cookies)
-                if res.status_code == 200 and any('SESSIONID' in key for key in cookies):
+
+                # 기존 성공 조건: HTTP 200 또는 리다이렉트 후 최종 응답과 SESSIONID 쿠키 확인
+                if any('SESSIONID' in key for key in cookies):
+                    self.log_message("🔑 순수 API 로그인 완료. 세션 쿠키 추출 성공.")
+
+                    # --- 🚨 msNum 로그인 응답 본문에서 추출 시도 (새로 추가된 로직) ---
+                    self.log_message("🔎 로그인 응답 본문에서 msNum 추출 시도 중...")
+
+                    # msNum 패턴 검색 (HTML 또는 JavaScript 변수에서)
+                    match = re.search(r'msNum\s*[:=]\s*["\']?(\d{10,})["\']?', res.text, re.IGNORECASE)
+
+                    if match:
+                        # self.ms_num 변수에 추출된 값을 저장 (클래스 변수에 저장해야 접근 가능)
+                        self.ms_num = match.group(1)
+                        self.log_message(f"✅ msNum 추출 성공: {self.ms_num} (로그인 응답)")
+                    else:
+                        self.log_message("❌ 로그인 응답 본문에서 msNum 찾기 실패. 다음 함수에서 재시도.")
+                    # ---------------------------------------------------------------
+
                     return {'result': 'success', 'cookies': cookies}
 
-                self.log_message(f"❌ API 로그인 실패 (HTTP {res.status_code} 또는 쿠키 추출 실패).")
+                self.log_message(f"❌ API 로그인 실패 (쿠키 추출 실패).")
                 if attempt < max_retries - 1: time.sleep(0.1)
             except requests.RequestException as e:
                 self.log_message(f"❌ 네트워크 오류: 로그인 중 오류 발생: {e}")
@@ -151,7 +172,7 @@ class APIBookingCore:
 
     def extract_ms_num(self):
         """웹페이지에서 msNum 값을 동적으로 추출 (타임아웃 15초 및 디버그 로그 강화)"""
-        target_url = "https://www.gakorea.com/reservation/golf/reservation.asp"
+        target_url = "https://www.gakorea.com/mobile/reservation/golf/reservation.asp"
         headers = {
             # User-Agent는 모바일 브라우저로 위장하여 서버가 모바일 페이지를 주도록 유도합니다.
             "User-Agent": "Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.6533.100 Mobile Safari/537.36",
