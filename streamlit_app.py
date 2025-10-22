@@ -107,17 +107,20 @@ class APIBookingCore:
         self.course_detail_mapping = {
             "A": "참피온OUT", "B": "참피온IN", "C": "마스타OUT", "D": "마스타IN"
         }
-        # 🚨 msNum을 빈 문자열로 초기화. getTeeList 함수 진입 시 확보 시도
+        # 🚨 msNum을 빈 문자열로 초기화
         self.ms_num = ""
+        # 🚨 Lock 추가: msNum 추출을 단일 스레드로 직렬화하기 위함
+        self.ms_num_lock = threading.Lock()
 
     def log_message(self, msg):
         self.log_message_func(msg, self.message_queue)
 
     def requests_login(self, usrid, usrpass, max_retries=3):
         """순수 requests를 이용한 API 로그인 시도 및 msNum 추출 시도"""
+        # 🚨 API 로그인 엔드포인트로 회귀
         login_url = "https://www.gakorea.com/controller/MemberController.asp"
         headers = {
-            # User-Agent는 모바일로 변경하여 모바일 페이지 응답을 유도
+            # User-Agent는 모바일로 유지
             "User-Agent": "Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.6533.100 Mobile Safari/537.36",
             "Referer": "https://www.gakorea.com/mobile/join/login.asp",
             "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
@@ -132,35 +135,28 @@ class APIBookingCore:
             try:
                 self.log_message(f"🔄 API 로그인 시도 중... (시도 {attempt + 1}/{max_retries})")
 
-                # allow_redirects=True로 변경: 리다이렉트 응답을 따라가 최종 HTML에서 msNum을 찾도록 시도
+                # allow_redirects=True로 리다이렉트를 따라가 최종 응답을 확인
                 res = self.session.post(login_url, headers=headers, data=payload, timeout=10, verify=False,
                                         allow_redirects=True)
 
-                res.raise_for_status()  # HTTP 오류가 발생하면 예외 발생
+                res.raise_for_status()
                 cookies = dict(self.session.cookies)
 
-                # 기존 성공 조건: HTTP 200 또는 리다이렉트 후 최종 응답과 SESSIONID 쿠키 확인
-                if any('SESSIONID' in key for key in cookies):
+                # 성공 조건: SESSIONID 쿠키가 설정되었거나 응답에 '로그아웃'이 포함되었을 경우
+                if '로그아웃' in res.text or any('SESSIONID' in key for key in cookies):
                     self.log_message("🔑 순수 API 로그인 완료. 세션 쿠키 추출 성공.")
 
-                    # --- 🚨 msNum 로그인 응답 본문에서 추출 시도 ---
-                    # 로그인 API 응답에는 msNum이 없을 가능성이 높으나, 안전망으로 시도
-                    self.log_message("🔎 로그인 응답 본문에서 msNum 추출 시도 중...")
-
-                    # msNum 패턴 검색 (HTML 또는 JavaScript 변수에서)
-                    match = re.search(r'msNum\s*[:=]\s*["\']?(\d{10,})["\']?', res.text, re.IGNORECASE)
-
-                    if match:
-                        # self.ms_num 변수에 추출된 값을 저장 (클래스 변수에 저장해야 접근 가능)
-                        self.ms_num = match.group(1)
-                        self.log_message(f"✅ msNum 추출 성공: {self.ms_num} (로그인 응답)")
-                    else:
-                        self.log_message("❌ 로그인 응답 본문에서 msNum 찾기 실패. 다음 함수에서 재시도.")
-                    # ---------------------------------------------------------------
+                    # 🚨 msNum 추출 로직 제거 (getTeeList 함수로 통합)
 
                     return {'result': 'success', 'cookies': cookies}
 
-                self.log_message(f"❌ API 로그인 실패 (쿠키 추출 실패).")
+                # 로그인 실패 메시지 감지
+                elif '로그인 정보가 일치하지 않습니다' in res.text:
+                    self.log_message("❌ 로그인 실패: 아이디 또는 비밀번호가 일치하지 않습니다.")
+                    self.log_message("🚨UI_ERROR:로그인 실패: 아이디 또는 비밀번호를 확인해주세요.")
+                    return {'result': 'fail', 'cookies': {}}
+
+                self.log_message(f"❌ 로그인 실패 (쿠키 추출 실패 또는 알 수 없는 응답).")
                 if attempt < max_retries - 1: time.sleep(0.1)
             except requests.RequestException as e:
                 self.log_message(f"❌ 네트워크 오류: 로그인 중 오류 발생: {e}")
@@ -170,7 +166,6 @@ class APIBookingCore:
                 break
 
         return {'result': 'fail', 'cookies': {}}
-
     # 🚨 extract_ms_num 함수는 더 이상 사용되지 않으며, 그 로직은 _fetch_tee_list 함수로 통합되었습니다.
     # def extract_ms_num(self):
     #     ...
@@ -286,6 +281,8 @@ class APIBookingCore:
         self.log_message(f"✅ 총 {len(all_fetched_times)}개의 예약 가능 시간대 확보 완료.")
         return all_fetched_times
 
+        # _fetch_tee_list 함수 (약 400번째 줄 근처)
+
     def _fetch_tee_list(self, date, cos, max_retries=2):
         """단일 코스의 티 리스트 조회 (Thread Pool 내부에서 사용)"""
         url = "https://www.gakorea.com/controller/ReservationController.asp"
@@ -300,28 +297,39 @@ class APIBookingCore:
             "Connection": "keep-alive"
         }
 
-        # --- 🚨 msNum 확보 로직 추가 (API 호출 직전에만 시도) ---
+        # --- 🚨 msNum 확보 로직 (Lock 사용 & main.asp 제거) ---
         if not self.ms_num:
-            self.log_message("⚠️ msNum 값이 없어 예약 페이지에서 재추출 시도 중...")
-            try:
-                # 로그인 세션으로 예약 페이지 HTML을 가져와 msNum을 추출 시도
-                target_url = "https://www.gakorea.com/mobile/reservation/golf/reservation.asp"
-                res = self.session.get(target_url, headers=headers, timeout=15, verify=False)
-                res.raise_for_status()
-
-                # 강화된 정규 표현식으로 추출 시도 (10자리 이상 숫자)
-                match = re.search(r'msNum\s*[:=]\s*["\']?(\d{10,})["\']?', res.text, re.IGNORECASE)
-
-                if match:
-                    self.ms_num = match.group(1)
-                    self.log_message(f"✅ msNum 추출 성공: {self.ms_num} (_fetch_tee_list 진입 전 확보)")
+            # 🚨 Lock 획득: msNum 추출은 하나의 스레드만 진행하도록 보장
+            with self.ms_num_lock:
+                # Lock을 획득한 후, 다른 스레드가 먼저 msNum을 채웠는지 다시 확인
+                if self.ms_num:
+                    self.log_message("✅ msNum은 이미 다른 스레드에 의해 확보됨. 통과.")
+                    pass
                 else:
-                    self.log_message(f"❌ msNum 추출 재시도 실패. 예약 프로세스를 중단합니다.")
-                    return []  # 추출 실패 시 빈 리스트 반환
+                    self.log_message("⚠️ msNum 값이 없어 (멀티스레드 동시 접근 방지 후) 추출 시도 중...")
+                    try:
+                        # 🚨 main.asp 로직이 제거되었음을 확인!
 
-            except requests.RequestException as e:
-                self.log_message(f"❌ msNum 추출을 위한 네트워크 오류: {e}. 예약을 중단합니다.")
-                return []
+                        # 2. 예약 페이지 HTML 로드 (msNum 추출 목적) - PC에서 성공했던 방식
+                        target_url = "https://www.gakorea.com/mobile/reservation/golf/reservation.asp"
+                        self.log_message(f"🔎 예약 페이지({target_url}) 재로드 후 msNum 추출 시도...")
+                        # 🚨 404가 나지 않도록 주의 깊게 재시도
+                        res = self.session.get(target_url, headers=headers, timeout=15, verify=False)
+                        res.raise_for_status()
+
+                        # 강화된 정규 표현식으로 추출 시도 (10자리 이상 숫자)
+                        match = re.search(r'msNum\s*[:=]\s*["\']?(\d{10,})["\']?', res.text, re.IGNORECASE)
+
+                        if match:
+                            self.ms_num = match.group(1)
+                            self.log_message(f"✅ msNum 추출 성공: {self.ms_num} (최종 확보)")
+                        else:
+                            self.log_message(f"❌ msNum 추출 재시도 실패. (HTML 길이: {len(res.text)})")
+                            return []
+
+                    except requests.RequestException as e:
+                        self.log_message(f"❌ msNum 추출을 위한 네트워크 오류: {e}. 예약을 중단합니다.")
+                        return []
         # ----------------------------------------------
 
         part = "1" if cos in ["A", "C"] else "2"
