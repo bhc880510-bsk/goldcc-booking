@@ -107,8 +107,8 @@ class APIBookingCore:
         self.course_detail_mapping = {
             "A": "참피온OUT", "B": "참피온IN", "C": "마스타OUT", "D": "마스타IN"
         }
-        # 🚨 msNum을 None으로 초기화하고 동적으로 추출
-        self.ms_num = None
+        # 🚨 msNum을 빈 문자열로 초기화. getTeeList 함수 진입 시 확보 시도
+        self.ms_num = ""
 
     def log_message(self, msg):
         self.log_message_func(msg, self.message_queue)
@@ -117,7 +117,7 @@ class APIBookingCore:
         """순수 requests를 이용한 API 로그인 시도 및 msNum 추출 시도"""
         login_url = "https://www.gakorea.com/controller/MemberController.asp"
         headers = {
-            # 기존 코드 유지 (User-Agent는 모바일로 변경)
+            # User-Agent는 모바일로 변경하여 모바일 페이지 응답을 유도
             "User-Agent": "Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.6533.100 Mobile Safari/537.36",
             "Referer": "https://www.gakorea.com/mobile/join/login.asp",
             "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
@@ -143,7 +143,8 @@ class APIBookingCore:
                 if any('SESSIONID' in key for key in cookies):
                     self.log_message("🔑 순수 API 로그인 완료. 세션 쿠키 추출 성공.")
 
-                    # --- 🚨 msNum 로그인 응답 본문에서 추출 시도 (새로 추가된 로직) ---
+                    # --- 🚨 msNum 로그인 응답 본문에서 추출 시도 ---
+                    # 로그인 API 응답에는 msNum이 없을 가능성이 높으나, 안전망으로 시도
                     self.log_message("🔎 로그인 응답 본문에서 msNum 추출 시도 중...")
 
                     # msNum 패턴 검색 (HTML 또는 JavaScript 변수에서)
@@ -170,59 +171,10 @@ class APIBookingCore:
 
         return {'result': 'fail', 'cookies': {}}
 
-    def extract_ms_num(self):
-        """웹페이지에서 msNum 값을 동적으로 추출 (타임아웃 15초 및 디버그 로그 강화)"""
-        target_url = "https://www.gakorea.com/mobile/reservation/golf/reservation.asp"
-        headers = {
-            # User-Agent는 모바일 브라우저로 위장하여 서버가 모바일 페이지를 주도록 유도합니다.
-            "User-Agent": "Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.6533.100 Mobile Safari/537.36",
-            "Referer": "https://www.gakorea.com/mobile/join/login.asp",
-            "Connection": "keep-alive"
-        }
-        self.log_message(f"🔎 웹 페이지 ({target_url})에서 msNum 값 추출 시도 중...")
-
-        match = None
-        try:
-            # 타임아웃을 15초로 증가 (네트워크 지연 대비)
-            res = self.session.get(target_url, headers=headers, timeout=15, verify=False)
-
-            # --- 디버그 로그: 상태 코드 확인 ---
-            self.log_message(f"✅ 추출 페이지 응답: Status {res.status_code}")
-            if res.status_code != 200:
-                self.log_message(f"⚠️ 요청 실패: 상태 코드가 200이 아님. HTML 앞 100자: {res.text[:100]}...")
-            # ----------------------------------
-
-            # --- 강화된 정규 표현식 패턴 (3단계 검색) ---
-            # 1. HTML Hidden 필드 패턴 (가장 일반적)
-            pattern1 = r'name=["\']msNum["\']\s*value\s*=\s*["\']?(\d+)'
-            match = re.search(pattern1, res.text, re.DOTALL | re.IGNORECASE)
-
-            # 2. JavaScript 변수 할당 패턴 (대체)
-            if not match:
-                # msNum: '숫자', msNum = '숫자', 또는 함수 호출 인자 형태를 찾습니다.
-                pattern2 = r'msNum\s*[:=]\s*["\']?(\d{10,})'  # 10자리 이상 숫자만 타겟
-                match = re.search(pattern2, res.text, re.IGNORECASE)
-
-            # 3. 전체 HTML에서 msNum과 긴 숫자 ID 매칭 (최후의 수단)
-            if not match:
-                # 'msNum' 텍스트 뒤에 50자 이내에 있는 10자리 이상의 숫자를 찾습니다.
-                pattern3 = r'msNum[\s\S]{0,50}(\d{10,})'
-                match = re.search(pattern3, res.text, re.IGNORECASE)
-
-            if match:
-                self.ms_num = match.group(1)
-                self.log_message(f"✅ msNum 추출 성공: {self.ms_num}")
-                return True
-            else:
-                self.log_message("❌ msNum 패턴을 찾을 수 없습니다. HTML 구조 변경 가능성.")
-                # --- 디버그 로그: 추출 실패 시 HTML 내용 출력 ---
-                self.log_message(f"❌ 추출 실패 HTML 내용 앞 200자: {res.text[:200]}")
-                # ------------------------------------------
-                return False
-
-        except requests.RequestException as e:
-            self.log_message(f"❌ msNum 추출 오류: 네트워크 요청 실패/타임아웃 ({e})")
-            return False
+    # 🚨 extract_ms_num 함수는 더 이상 사용되지 않으며, 그 로직은 _fetch_tee_list 함수로 통합되었습니다.
+    # def extract_ms_num(self):
+    #     ...
+    #     return False
 
     def keep_session_alive(self, target_dt):
         """세션 유지를 위해 1분에 1회 서버에 접속 시도 (백그라운드 스레드에서 실행)"""
@@ -265,15 +217,19 @@ class APIBookingCore:
             "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
             "X-Requested-With": "XMLHttpRequest",
             "Origin": "https://www.gakorea.com",
-            "Referer": "https://www.gakorea.com/reservation/golf/reservation.asp",
+            # 모바일 예약 페이지 Referer 사용
+            "Referer": "https://www.gakorea.com/mobile/reservation/golf/reservation.asp",
             "Connection": "keep-alive"
         }
         year_month = date[:6]
 
         # 🚨 self.ms_num이 추출된 값인지 확인
-        if self.ms_num is None:
-            self.log_message("❌ check_booking_open_by_calendar: msNum이 설정되지 않았습니다.", self.message_queue)
-            return False
+        if self.ms_num is None or self.ms_num == "":
+            # msNum이 없으면 API 호출에 실패하므로, 일단 빈 값으로 진행
+            # 이 함수의 주목적은 예약 가능 여부 확인이므로, 로그만 남기고 진행
+            self.log_message("⚠️ check_booking_open_by_calendar: msNum 값이 설정되지 않아 API 호출에 실패할 수 있습니다.",
+                             self.message_queue)
+            # return False # msNum이 없어도 서버가 응답할 수 있으므로 일단 진행
 
         payload = {
             "method": "getCalendar", "coDiv": "611", "selYm": year_month, "msNum": self.ms_num, "msDivision": "10",
@@ -305,16 +261,14 @@ class APIBookingCore:
             "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
             "X-Requested-With": "XMLHttpRequest",
             "Origin": "https://www.gakorea.com",
-            "Referer": "https://www.gakorea.com/reservation/golf/reservation.asp",
+            # 모바일 예약 페이지 Referer 사용
+            "Referer": "https://www.gakorea.com/mobile/reservation/golf/reservation.asp",
             "Connection": "keep-alive"
         }
         cos_values = ["A", "B", "C", "D"]
         all_fetched_times = []
 
-        # 🚨 msNum이 추출된 값인지 확인
-        if self.ms_num is None:
-            self.log_message("❌ get_all_available_times: msNum이 설정되지 않았습니다.", self.message_queue)
-            return []
+        # msNum 확인 로직은 _fetch_tee_list에서 처리하므로 여기서는 생략합니다.
 
         with ThreadPoolExecutor(max_workers=4) as executor:
             future_to_cos = {executor.submit(self._fetch_tee_list, date, cos): cos for cos in cos_values}
@@ -341,9 +295,34 @@ class APIBookingCore:
             "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
             "X-Requested-With": "XMLHttpRequest",
             "Origin": "https://www.gakorea.com",
-            "Referer": "https://www.gakorea.com/reservation/golf/reservation.asp",
+            # 모바일 예약 페이지 Referer 사용
+            "Referer": "https://www.gakorea.com/mobile/reservation/golf/reservation.asp",
             "Connection": "keep-alive"
         }
+
+        # --- 🚨 msNum 확보 로직 추가 (API 호출 직전에만 시도) ---
+        if not self.ms_num:
+            self.log_message("⚠️ msNum 값이 없어 예약 페이지에서 재추출 시도 중...")
+            try:
+                # 로그인 세션으로 예약 페이지 HTML을 가져와 msNum을 추출 시도
+                target_url = "https://www.gakorea.com/mobile/reservation/golf/reservation.asp"
+                res = self.session.get(target_url, headers=headers, timeout=15, verify=False)
+                res.raise_for_status()
+
+                # 강화된 정규 표현식으로 추출 시도 (10자리 이상 숫자)
+                match = re.search(r'msNum\s*[:=]\s*["\']?(\d{10,})["\']?', res.text, re.IGNORECASE)
+
+                if match:
+                    self.ms_num = match.group(1)
+                    self.log_message(f"✅ msNum 추출 성공: {self.ms_num} (_fetch_tee_list 진입 전 확보)")
+                else:
+                    self.log_message(f"❌ msNum 추출 재시도 실패. 예약 프로세스를 중단합니다.")
+                    return []  # 추출 실패 시 빈 리스트 반환
+
+            except requests.RequestException as e:
+                self.log_message(f"❌ msNum 추출을 위한 네트워크 오류: {e}. 예약을 중단합니다.")
+                return []
+        # ----------------------------------------------
 
         part = "1" if cos in ["A", "C"] else "2"
         # 🚨 self.ms_num을 사용
@@ -413,7 +392,8 @@ class APIBookingCore:
             "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
             "X-Requested-With": "XMLHttpRequest",
             "Origin": "https://www.gakorea.com",
-            "Referer": "https://www.gakorea.com/reservation/golf/reservation.asp",
+            # 모바일 예약 페이지 Referer 사용
+            "Referer": "https://www.gakorea.com/mobile/reservation/golf/reservation.asp",
             "Connection": "keep-alive"
         }
         time_for_api = format_time_for_api(time_)
@@ -511,13 +491,9 @@ def start_pre_process(message_queue, stop_event, inputs):
 
         log_message("🔑 순수 API 로그인 완료. 세션 쿠키 추출 성공.", message_queue)
 
-        # 2. msNum 동적 추출
-        if not core.extract_ms_num():
-            log_message("❌ msNum 추출 실패. 예약 프로세스를 중단합니다.", message_queue)
-            message_queue.put(f"🚨UI_ERROR:msNum 추출 오류: msNum 값을 가져올 수 없어 예약을 중단합니다.")
-            return
-
-        log_message(f"✅ 동적 msNum({core.ms_num}) 확보 완료.", message_queue)
+        # 2. msNum 동적 추출 (기존 추출 실패 로직 제거)
+        # 🚨 msNum 추출은 getTeeList 함수에서 진행됨을 가정하고 건너뜁니다.
+        log_message("✅ 로그인 성공. msNum 추출 단계는 다음 API 호출 시 통합하여 진행됩니다.", message_queue)
 
         # 3. 가동 시작 시간 계산
         # st.date_input의 형식이 YYYY-MM-DD이지만, inputs에는 YYYYMMDD로 저장
@@ -543,7 +519,14 @@ def start_pre_process(message_queue, stop_event, inputs):
         if stop_event.is_set(): return
 
         # 🚨 티 타임 조회
+        # 이 함수가 실행될 때 _fetch_tee_list 내부에서 msNum을 확보하게 됩니다.
         all_times = core.get_all_available_times(params['date'])
+
+        # msNum 확보에 실패하여 all_times가 비어있을 경우 프로세스 중단
+        if not core.ms_num and not all_times:
+            log_message("❌ msNum 확보 실패 및 예약 가능 시간대 조회 실패. 예약 프로세스를 중단합니다.", message_queue)
+            message_queue.put(f"🚨UI_ERROR:msNum 추출 오류: msNum 값을 가져올 수 없어 예약을 중단합니다.")
+            return
 
         is_reverse_order = params['order'] == '역순 (내림)'
 
