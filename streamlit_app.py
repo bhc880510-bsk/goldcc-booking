@@ -122,11 +122,12 @@ class APIBookingCore:
         self.log_message_func(msg, self.message_queue)
 
     def requests_login(self, usrid, usrpass, max_retries=3):
-        """순수 requests를 이용한 API 로그인 시도 및 msNum 추출 시도"""
-        # 🚨 API 로그인 엔드포인트로 회귀
+        """
+        🚨 [수정]
+        순수 requests를 이용한 API 로그인 시도 및 응답 텍스트에서 msNum을 직접 추출합니다.
+        """
         login_url = "https://www.gakorea.com/controller/MemberController.asp"
         headers = {
-            # User-Agent는 모바일로 유지
             "User-Agent": "Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.6533.100 Mobile Safari/537.36",
             "Referer": "https://www.gakorea.com/mobile/join/login.asp",  # 모바일 로그인 Referer
             "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
@@ -139,22 +140,35 @@ class APIBookingCore:
         for attempt in range(max_retries):
             if self.stop_event.is_set(): return {'result': 'fail', 'cookies': {}}
             try:
-                self.log_message(f"🔄 API 로그인 시도 중... (시도 {attempt + 1}/{max_retries})")
+                self.log_message(f"🔄 API 로그인 및 msNum 추출 시도 중... (시도 {attempt + 1}/{max_retries})")
 
-                # allow_redirects=True로 리다이렉트를 따라가 최종 응답을 확인
                 res = self.session.post(login_url, headers=headers, data=payload, timeout=10, verify=False,
                                         allow_redirects=True)
 
                 res.raise_for_status()
                 cookies = dict(self.session.cookies)
 
-                # 성공 조건: SESSIONID 쿠키가 설정되었거나 응답에 '로그아웃'이 포함되었을 경우
-                if '로그아웃' in res.text or any('SESSIONID' in key for key in cookies):
-                    self.log_message("🔑 순수 API 로그인 완료. 세션 쿠키 추출 성공.")
+                # 🚨 [수정] 로그인 응답(res.text)에서 msNum을 직접 찾습니다.
+                match = re.search(
+                    r'(?:msNum|ms_num)\s*[:=]\s*["\']?(\d{10,})["\']?',
+                    res.text,
+                    re.IGNORECASE | re.DOTALL
+                )
 
-                    # 🚨 msNum 추출 로직 제거 (getTeeList 함수로 통합)
-
+                if match:
+                    # 🚨 [수정] msNum을 찾으면 즉시 저장하고 성공 반환
+                    with self.ms_num_lock:
+                        self.ms_num = match.group(1)
+                    self.log_message(f"✅ msNum 추출 성공 (로그인 응답): {self.ms_num}")
+                    self.log_message("🔑 순수 API 로그인 완료. 세션 쿠키 및 msNum 확보.")
                     return {'result': 'success', 'cookies': cookies}
+
+                # 🚨 [수정] msNum을 못찾았지만, 세션 쿠키가 있거나 '로그아웃' 텍스트가 있다면
+                # 로그인은 되었으나 msNum 확보에 실패한 것입니다. (실패 처리)
+                if '로그아웃' in res.text or any('SESSIONID' in key for key in cookies):
+                    self.log_message("❌ 로그인 세션은 성공했으나, 응답에서 msNum을 찾지 못했습니다.")
+                    self.log_message(f"ℹ️ [진단용] 로그인 응답 HTML (일부): {res.text[:1000]}...")
+                    return {'result': 'fail', 'cookies': {}}  # msNum 없으면 실패
 
                 # 로그인 실패 메시지 감지
                 elif '로그인 정보가 일치하지 않습니다' in res.text:
@@ -162,8 +176,9 @@ class APIBookingCore:
                     self.log_message("🚨UI_ERROR:로그인 실패: 아이디 또는 비밀번호를 확인해주세요.")
                     return {'result': 'fail', 'cookies': {}}
 
-                self.log_message(f"❌ 로그인 실패 (쿠키 추출 실패 또는 알 수 없는 응답).")
+                self.log_message(f"❌ 로그인 실패 (msNum, 쿠키 모두 추출 실패). 응답: {res.text[:200]}")
                 if attempt < max_retries - 1: time.sleep(0.1)
+
             except requests.RequestException as e:
                 self.log_message(f"❌ 네트워크 오류: 로그인 중 오류 발생: {e}")
                 if attempt < max_retries - 1: time.sleep(0.1)
@@ -307,77 +322,21 @@ class APIBookingCore:
             "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
             "X-Requested-With": "XMLHttpRequest",
             "Origin": "https://www.gakorea.com",
-            # 🚨 [핵심 수정 1] Referer를 PC 웹 달력 페이지가 아닌 '모바일' 달력 페이지로 통일합니다.
-            # 🚨 '골드cc network현황.txt'에서 확인된 모바일 경로를 사용합니다.
             "Referer": "https://www.gakorea.com/mobile/reservation/golf/reservation.asp",
             "Connection": "keep-alive"
         }
 
-        # --- 🚨 msNum 확보 로직 (Lock 사용 & 순수 웹 도메인 적용) ---
+        # --- 🚨 [수정] msNum 확보 로직 (로그인 시 확보된 값을 사용) ---
+        # 기존의 불안정한 'reservation.asp' 페이지 스크래핑 로직 전체 삭제
         if not self.ms_num:
-            with self.ms_num_lock:
-                if self.ms_num:
-                    self.log_message("✅ msNum은 이미 다른 스레드에 의해 확보됨. 통과.")
-                    pass
-                else:
-                    self.log_message("⚠️ msNum 값이 없어 (순수 웹 도메인에서) 추출 시도 중...")
-
-                    # 🚨 5회 시도 루프 시작
-                    for attempt in range(5):
-                        try:
-                            # 🚨 [핵심 수정 2] msNum을 추출할 페이지를 PC 웹페이지가 아닌 '모바일' 달력 페이지로 변경합니다.
-                            # 🚨 '골드cc network현황.txt'에서 확인된 모바일 경로를 사용합니다.
-                            target_url = "https://www.gakorea.com/mobile/reservation/golf/reservation.asp"
-
-                            self.log_message(
-                                f"🔎 예약 페이지(모바일 도메인: {target_url}) 재로드 후 msNum 추출 시도... (시도 {attempt + 1}/5)")
-
-                            # 프록시 설정 (프록시가 있다면 사용)
-                            res = self.session.get(target_url, headers=headers, timeout=15, verify=False,
-                                                   proxies=self.proxies)
-                            res.raise_for_status()
-
-                            # 🚨 [요청 사항] 진단용 HTML 로그 출력 제거 (주석 처리)
-                            # if attempt == 0:
-                            #     # HTML이 너무 길기 때문에, 첫 번째 시도에서만 전체 HTML을 로그로 남깁니다.
-                            #     self.log_message(
-                            #         f"ℹ️ [진단용] 받은 HTML 전체 내용:\n{res.text[:2000]}... [전체 길이: {len(res.text)}]")
-
-                            # 강화된 정규 표현식으로 추출 시도
-                            match = re.search(
-                                r'(?:msNum|ms_num)\s*[:=]\s*["\']?(\d{10,})["\']?',
-                                res.text,
-                                re.IGNORECASE | re.DOTALL
-                            )
-
-                            if match:
-                                self.ms_num = match.group(1)
-                                self.log_message(f"✅ msNum 추출 성공: {self.ms_num} (최종 확보)")
-                                # 루프 탈출
-                                break
-                            else:
-                                self.log_message(f"❌ msNum 추출 재시도 실패. (HTML 길이: {len(res.text)})")
-                                time.sleep(0.5)  # 잠시 대기 후 재시도
-                                continue  # 다음 시도
-
-                        except requests.RequestException as e:
-                            self.log_message(f"❌ msNum 추출을 위한 네트워크 오류: {e}. 재시도합니다.")
-                            time.sleep(1)
-                            continue
-                        except Exception as e:
-                            self.log_message(f"💥 [심각] msNum 추출 중 예상치 못한 오류 발생: {type(e).__name__} - {e}. 재시도합니다.")
-                            time.sleep(1)
-                            continue
-
-                    # 🚨 5회 시도 모두 실패 시 예약 중단
-                    if not self.ms_num:  # 5회 시도 후에도 ms_num이 없으면
-                        self.log_message("🛑 5회 시도 후 msNum 추출 실패. 예약을 중단합니다.")
-                        return []
+            # 로그인 단계에서 ms_num이 확보되지 않았다면 API 호출이 불가능
+            self.log_message("🛑 msNum 값이 없습니다. 로그인 단계에서 확보되지 않았습니다. API 호출 중단.")
+            return []
         # ----------------------------------------------
 
-        # msNum 확보가 실패하면 빈 배열 반환
-        if not self.ms_num:
-            return []
+        # msNum 확보가 실패하면 빈 배열 반환 (위에서 이미 처리됨)
+        # if not self.ms_num:
+        #     return []
 
         part = "1" if cos in ["A", "C"] else "2"
         payload = {
@@ -538,13 +497,13 @@ def start_pre_process(message_queue, stop_event, inputs):
         core = APIBookingCore(log_message, message_queue, stop_event)
 
         # 1. 로그인
-        log_message("✅ 작업 진행 중: API 로그인 세션 쿠키 확보 시도...", message_queue)
+        log_message("✅ 작업 진행 중: API 로그인 및 msNum 확보 시도...", message_queue)  # 🚨 [수정] 로그 메시지 변경
         login_result = core.requests_login(params.get('id'), params.get('pw'))  # params.get() 안전 접근
         if login_result['result'] != 'success':
-            log_message("❌ 로그인 실패. 아이디/비밀번호를 확인하거나 네트워크를 점검하세요.", message_queue)
-            message_queue.put(f"🚨UI_ERROR:로그인 실패: 아이디 또는 비밀번호를 확인하세요.")
+            log_message("❌ 로그인 또는 msNum 확보 실패. 아이디/비밀번호를 확인하거나 네트워크를 점검하세요.", message_queue)  # 🚨 [수정] 로그 메시지 변경
+            message_queue.put(f"🚨UI_ERROR:로그인 또는 msNum 확보 실패: 아이디/비밀번호 또는 서버 응답을 확인하세요.")  # 🚨 [수정] UI 에러 변경
             return
-        log_message("✅ 로그인 성공. 세션 쿠키 확보 완료.", message_queue)
+        log_message("✅ 로그인 및 msNum 확보 성공.", message_queue)  # 🚨 [수정] 로그 메시지 변경
 
         # 2. 가동 시작 시간 계산 및 즉시 실행 로직 적용 (KST 기준)
         run_datetime_str = f"{params.get('run_date')} {params.get('run_time')}"
