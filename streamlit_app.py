@@ -74,11 +74,13 @@ def format_time_for_display(time_str):
         return f"{time_str[:2]}:{time_str[2:]}"
     return time_str
 
-def wait_until(target_dt_kst, stop_event, message_queue, log_prefix="프로그램 실행", log_countdown=False): # 🚨 변수명 target_dt_kst로 변경 (KST-aware 객체 수신)
+
+def wait_until(target_dt_kst, stop_event, message_queue, log_prefix="프로그램 실행",
+               log_countdown=False):  # 🚨 변수명 target_dt_kst로 변경 (KST-aware 객체 수신)
     """
     특정 시간까지 대기 (쓰레드 내에서 실행)
     """
-    global KST # KST 전역 객체 사용
+    global KST  # KST 전역 객체 사용
 
     # 🚨 로그 메시지에 KST 기준 명시
     log_message(f"⏳ {log_prefix} 대기중: {target_dt_kst.strftime('%H:%M:%S.%f')[:-3]} (KST 기준)", message_queue)
@@ -113,6 +115,7 @@ def wait_until(target_dt_kst, stop_event, message_queue, log_prefix="프로그�
         # 🚨 실제 종료 시각과 목표 시각의 차이를 로그에 추가하여 정확도 확인
         actual_diff = (datetime.datetime.now(KST) - target_dt_kst).total_seconds()
         log_message(f"✅ 목표 시간 도달! {log_prefix} 스레드 즉시 실행. (종료 시각 차이: {actual_diff:.3f}초)", message_queue)
+
 
 # ============================================================
 # API Booking Core Class
@@ -268,6 +271,7 @@ class APIBookingCore:
                 pass
 
         return False  # 중단 신호로 종료
+
     # --------------------------------------------------------------------------
     # 기존 check_booking_open_by_calendar 함수
     # --------------------------------------------------------------------------
@@ -516,6 +520,7 @@ class APIBookingCore:
             self.log_message(f"FATAL: API 예약 프로세스 중 에러 발생: {e}")
             raise
 
+
 # ============================================================
 # Main Threading Logic - start_pre_process (핵심 프로세스)
 # ============================================================
@@ -640,16 +645,7 @@ def start_pre_process(message_queue, stop_event, inputs):
         message_queue.put(
             f"🚨UI_ERROR:[{datetime.datetime.now(KST).strftime('%H:%M:%S.%f')[:-3]}] ❌ 치명적 오류 발생! 로그를 확인해주세요.")
 
-# ============================================================
-# Streamlit UI 구성 및 상태 관리
-# ============================================================
 
-# 🚨 세션 상태 초기화 및 기본값 설정
-# ============================================================
-# Streamlit UI 구성 및 상태 관리
-# ============================================================
-
-# 🚨 세션 상태 초기화 및 기본값 설정
 # ============================================================
 # Streamlit UI 구성 및 상태 관리
 # ============================================================
@@ -829,34 +825,75 @@ def check_queue_and_rerun():
 
 
 # -------------------------------------------------------------------------
-# UI 레이아웃 (세로 길이 최소화)
+# 💡 UI 레이아웃 (PC/모바일 최적화 - 입력 상자 너비 조정)
 # -------------------------------------------------------------------------
 
 st.set_page_config(layout="wide")
-st.title("⛳ 골드CC 모바일 예약")
+
+# CSS: PC/모바일 환경 모두에서 입력 필드의 최대 폭을 제한하여 입력 상자 길이를 짧게 만듭니다.
+st.markdown("""
+    <style>
+    /* 🚨 변경: 입력 필드 (text_input, date_input, selectbox 등)의 최대 너비를 200px로 제한 */
+    /* stDateInput은 Streamlit의 내부 요소이므로 함께 조정합니다. */
+    div.stText, div.stDateInput, div.stSelectbox {
+        max-width: 200px !important; 
+    }
+
+    /* 입력 상자를 둘러싼 부모 요소의 너비도 제한하여 전체 너비 조정에 도움을 줍니다. */
+    div[data-testid="stTextInput"], div[data-testid="stDateInput"], div[data-testid="stSelectbox"] {
+        max-width: 200px !important;
+    }
+
+    /* ID/PW 입력 상자는 2분할을 유지하되, 전체 컨테이너 너비를 제한합니다. */
+    div[data-testid="stVerticalBlock"] > div:nth-child(1) > div:nth-child(1) > div {
+        max-width: 420px; /* ID/PW 컨테이너 너비 제한 (200px + 200px + 마진) */
+    }
+
+    /* 폰트 크기 조정 (h1, h2, h3 대체) */
+    .app-title {
+        font-size: 20px; 
+        font-weight: bold; 
+        margin-top: -10px; /* 제목 상단 여백 줄이기 */
+        margin-bottom: 5px;
+    }
+    .section-header {
+        font-size: 16px; 
+        font-weight: bold; 
+        margin-top: 5px; 
+        margin-bottom: 5px;
+    }
+    .st-emotion-cache-1kyy013 { /* st.container의 패딩 줄이기 */
+        padding-top: 5px;
+        padding-bottom: 5px;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+# 폰트 크기 축소 적용
+st.markdown('<p class="app-title">⛳ 골드CC 모바일 예약</p>', unsafe_allow_html=True)
 
 # --- 1. 설정 섹션 ---
-with st.container(border=True):  # height=500 제거하여 높이 자동 조절
-    st.subheader("🔑 로그인 및 조건 설정")
+with st.container(border=True):
+    st.markdown('<p class="section-header">🔑 로그인 및 조건 설정</p>', unsafe_allow_html=True)
 
     # 1-1. 로그인 섹션 (2열 압축)
     col1, col2 = st.columns(2)
     with col1:
-        st.text_input("아이디", key="id_input", label_visibility="visible")  # label_visibility="visible" 추가 (기본값)
+        st.text_input("사용자ID", key="id_input", label_visibility="visible")
     with col2:
-        st.text_input("비밀번호", type="password", key="pw_input", label_visibility="visible")
+        st.text_input("암호", type="password", key="pw_input", label_visibility="visible")
 
     # 1-2. 예약 및 가동 조건 (3열로 최대한 압축)
     st.markdown("---")
-    st.subheader("🗓️ 예약/가동 시간 설정")
+    st.markdown('<p class="section-header">🗓️ 예약/가동 시간 설정</p>', unsafe_allow_html=True)
 
-    # 예약 목표일, 가동 시작일, 가동 시작 시간을 3열로 배치
-    col3, col4, col5 = st.columns(3)
+    # 🚨 수정: 컬럼 비율을 [1, 1, 1]로 유지하되, CSS로 너비를 강제합니다.
+    col3, col4, col5 = st.columns([1, 1, 1])
 
     with col3:
         # st.date_input은 높이가 높아, label을 짧게 변경
         st.date_input(
-            "예약 목표일",
+            "예약일",
             key="date_input",
             format="YYYY-MM-DD",
             label_visibility="visible"
@@ -864,29 +901,32 @@ with st.container(border=True):  # height=500 제거하여 높이 자동 조절
 
     with col4:
         # 가동 시작일
-        st.text_input("가동 시작일 (YYYYMMDD)", key="run_date_input", help="스크립트가 실행될 목표일", label_visibility="visible")
+        st.text_input("가동시작일", key="run_date_input", help="YYYYMMDD", label_visibility="visible")
 
     with col5:
         # 가동 시작 시각
-        st.text_input("가동 시작 시각 (HH:MM:SS)", key="run_time_input", help="스크립트가 실행될 목표 시각", label_visibility="visible")
+        st.text_input("가동시작시간", key="run_time_input", help="HH:MM:SS", label_visibility="visible")
 
     # 1-3. 필터 및 코스 설정 (3열 압축)
     st.markdown("---")
-    st.subheader("⚙️ 티타임 필터 및 우선순위")
-    col6, col7, col8 = st.columns(3)
+    st.markdown('<p class="section-header">⚙️ 티타임 필터 및 우선순위</p>', unsafe_allow_html=True)
+
+    # 🚨 수정: 지연(초)와 테스트 모드의 컬럼 비율을 더 좁게 만듭니다. (예: [2.5, 2.5, 1])
+    col6, col7, col8 = st.columns([2.5, 2.5, 1])
 
     with col6:
-        st.text_input("시작시간 (HH:MM)", key="res_start_input", label_visibility="visible")
-        st.selectbox("코스", ["All", "참피온", "마스타"], key="course_input", label_visibility="visible")
+        st.text_input("시작시간", key="res_start_input", label_visibility="visible")
+        st.selectbox("코스선택", ["All", "참피온", "마스타"], key="course_input", label_visibility="visible")
 
     with col7:
-        st.text_input("종료시간 (HH:MM)", key="res_end_input", label_visibility="visible")
-        st.selectbox("우선순위", ["순차 (오름)", "역순 (내림)"], key="order_input", label_visibility="visible")
+        st.text_input("종료시간", key="res_end_input", label_visibility="visible")
+        st.selectbox("예약순서", ["순차(▲)", "역순(▼)"], key="order_input", label_visibility="visible")
 
     with col8:
-        # 지연시간과 테스트 모드는 세로로 배치 (한 필드만 남아서)
-        st.text_input("예약 지연 (초)", key="delay_input", help="예약 가능 신호 감지 후 예약 시도 지연 시간", label_visibility="visible")
-        st.checkbox("테스트 모드", key="test_mode_checkbox", help="체크 시 실제 예약 API 호출을 건너뜁니다.")
+        # 지연시간과 테스트 모드는 세로로 배치
+        st.text_input("예약지연(초)", key="delay_input", help="예약 가능 신호 감지 후 예약 시도 지연 시간", label_visibility="visible")
+        # 체크박스의 너비를 좁은 컬럼에 맞춥니다.
+        st.checkbox("테스트", key="test_mode_checkbox", help="실제 예약 안함")
 
 # --- 2. 실행 버튼 섹션 ---
 st.markdown("---")
@@ -910,15 +950,15 @@ with col_stop:
 
 # --- 3. 로그 섹션 ---
 st.markdown("---")
-st.subheader("📝 실행 로그")
+st.markdown('<p class="section-header">📝 실행 로그</p>', unsafe_allow_html=True)
 
 # 로그 출력을 위한 Placeholder 생성
 if st.session_state.log_container_placeholder is None:
     st.session_state.log_container_placeholder = st.empty()
 
 # 로그 메시지 출력 (가장 최근 메시지가 위로 오도록 역순 출력)
-# 로그 창 높이를 300px로 증가시켜 시인성 개선
-with st.session_state.log_container_placeholder.container(height=300):
+# 로그 창 높이를 250px로 최적화
+with st.session_state.log_container_placeholder.container(height=250):
     # 로그가 너무 길어지는 것을 방지하기 위해 최근 500줄만 표시
     for msg in reversed(st.session_state.log_messages[-500:]):
 
