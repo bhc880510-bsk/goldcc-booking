@@ -1,4 +1,5 @@
 streamlit
 requests
 ujson
+pytz
 urllib3
