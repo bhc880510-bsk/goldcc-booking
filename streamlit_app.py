@@ -36,11 +36,14 @@ def log_message(message, message_queue):
         message_queue.put(f"🚨UI_LOG:[{datetime.datetime.now().strftime('%H:%M:%S.%f')[:-3]}] {message}")
     except Exception:
         pass
+
+
 def get_default_date(days):
     """오늘 날짜로부터 지정된 일수만큼 지난 날짜를 반환 (datetime.date 객체)"""
     KST = pytz.timezone('Asia/Seoul')
     # 🚨 KST 기준의 오늘 날짜를 기준으로 계산
     return (datetime.datetime.now(KST).date() + datetime.timedelta(days=days))
+
 
 def format_time_for_api(time_str):
     """'HH:MM' 형태를 API에 맞는 'HHMM' 형태로 변환"""
@@ -125,7 +128,7 @@ class APIBookingCore:
         headers = {
             # User-Agent는 모바일로 유지
             "User-Agent": "Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.6533.100 Mobile Safari/537.36",
-            "Referer": "https://www.gakorea.com/mobile/join/login.asp",
+            "Referer": "https://www.gakorea.com/mobile/join/login.asp",  # 모바일 로그인 Referer
             "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
             "X-Requested-With": "XMLHttpRequest"
         }
@@ -169,10 +172,12 @@ class APIBookingCore:
                 break
 
         return {'result': 'fail', 'cookies': {}}
+
     # 🚨 extract_ms_num 함수는 더 이상 사용되지 않으며, 그 로직은 _fetch_tee_list 함수로 통합되었습니다.
     # def extract_ms_num(self):
     #     ...
     #     return False
+
     def keep_session_alive(self, target_dt):
         """세션 유지를 위해 1분에 1회 서버에 접속 시도 (백그라운드 스레드에서 실행)"""
 
@@ -292,6 +297,7 @@ class APIBookingCore:
         return all_fetched_times
 
         # _fetch_tee_list 함수 (약 400번째 줄 근처)
+
     def _fetch_tee_list(self, date, cos, max_retries=2):
         """단일 코스의 티 리스트 조회 (Thread Pool 내부에서 사용)"""
         url = "https://www.gakorea.com/controller/ReservationController.asp"
@@ -301,8 +307,9 @@ class APIBookingCore:
             "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
             "X-Requested-With": "XMLHttpRequest",
             "Origin": "https://www.gakorea.com",
-            # Referer는 웹 달력 페이지로 고정
-            "Referer": "https://www.gakorea.com/reservation/golf/reservation.asp",
+            # 🚨 [핵심 수정 1] Referer를 PC 웹 달력 페이지가 아닌 '모바일' 달력 페이지로 통일합니다.
+            # 🚨 '골드cc network현황.txt'에서 확인된 모바일 경로를 사용합니다.
+            "Referer": "https://www.gakorea.com/mobile/reservation/golf/reservation.asp",
             "Connection": "keep-alive"
         }
 
@@ -318,20 +325,23 @@ class APIBookingCore:
                     # 🚨 5회 시도 루프 시작
                     for attempt in range(5):
                         try:
-                            target_url = "https://www.gakorea.com/reservation/golf/reservation.asp"
+                            # 🚨 [핵심 수정 2] msNum을 추출할 페이지를 PC 웹페이지가 아닌 '모바일' 달력 페이지로 변경합니다.
+                            # 🚨 '골드cc network현황.txt'에서 확인된 모바일 경로를 사용합니다.
+                            target_url = "https://www.gakorea.com/mobile/reservation/golf/reservation.asp"
+
                             self.log_message(
-                                f"🔎 예약 페이지(웹 도메인: {target_url}) 재로드 후 msNum 추출 시도... (시도 {attempt + 1}/5)")
+                                f"🔎 예약 페이지(모바일 도메인: {target_url}) 재로드 후 msNum 추출 시도... (시도 {attempt + 1}/5)")
 
                             # 프록시 설정 (프록시가 있다면 사용)
                             res = self.session.get(target_url, headers=headers, timeout=15, verify=False,
                                                    proxies=self.proxies)
                             res.raise_for_status()
 
-                            # 🚨 [추가]: HTML 내용 전체를 로그로 출력하여 진단
-                            if attempt == 0:
-                                # HTML이 너무 길기 때문에, 첫 번째 시도에서만 전체 HTML을 로그로 남깁니다.
-                                self.log_message(
-                                    f"ℹ️ [진단용] 받은 HTML 전체 내용:\n{res.text[:2000]}... [전체 길이: {len(res.text)}]")
+                            # 🚨 [요청 사항] 진단용 HTML 로그 출력 제거 (주석 처리)
+                            # if attempt == 0:
+                            #     # HTML이 너무 길기 때문에, 첫 번째 시도에서만 전체 HTML을 로그로 남깁니다.
+                            #     self.log_message(
+                            #         f"ℹ️ [진단용] 받은 HTML 전체 내용:\n{res.text[:2000]}... [전체 길이: {len(res.text)}]")
 
                             # 강화된 정규 표현식으로 추출 시도
                             match = re.search(
@@ -360,8 +370,9 @@ class APIBookingCore:
                             continue
 
                     # 🚨 5회 시도 모두 실패 시 예약 중단
-                    self.log_message("🛑 5회 시도 후 msNum 추출 실패. 예약을 중단합니다.")
-                    return []
+                    if not self.ms_num:  # 5회 시도 후에도 ms_num이 없으면
+                        self.log_message("🛑 5회 시도 후 msNum 추출 실패. 예약을 중단합니다.")
+                        return []
         # ----------------------------------------------
 
         # msNum 확보가 실패하면 빈 배열 반환
@@ -582,6 +593,7 @@ def start_pre_process(message_queue, stop_event, inputs):
         )
 
         # 4. 예약 시도
+        # 🚨 [수정] params.get()을 사용하여 키가 없는 경우에 대한 방어 코드 추가
         core.run_api_booking(
             date=params.get('date'),
             target_course_name=params.get('course_type', 'All'),
@@ -598,6 +610,8 @@ def start_pre_process(message_queue, stop_event, inputs):
         log_message(error_msg, message_queue)
         message_queue.put(
             f"🚨UI_ERROR:[{datetime.datetime.now().strftime('%H:%M:%S.%f')[:-3]}] ❌ 치명적 오류 발생! 로그를 확인해주세요.")
+
+
 # ============================================================
 # Streamlit UI 구성 및 상태 관리
 # ============================================================
@@ -686,7 +700,10 @@ def run_booking():
         st.session_state['run_id'] = None
         return
 
-    # 폼 데이터를 session_state.inputs에 저장
+    # 🚨 폼 데이터 (st.session_state.inputs) 저장 시점 변경 -> start_pre_process로 전달
+    # 🚨 start_pre_process 함수 내부에서 params.get()을 사용하여 안전하게 값을 가져오도록 수정되었습니다.
+    # 🚨 (기존 코드에서 start_pre_process가 참조하는 st.session_state.inputs가
+    # 🚨 run_booking 함수가 종료된 후에도 올바르게 유지되도록 보장합니다.)
     st.session_state.inputs = {
         'id': st.session_state.id_input,
         'pw': st.session_state.pw_input,
@@ -694,9 +711,9 @@ def run_booking():
         'date': st.session_state.date_input.strftime('%Y%m%d'),
         'run_date': st.session_state.run_date_input,
         'run_time': st.session_state.run_time_input,
-        'res_start': st.session_state.res_start_input,
-        'res_end': st.session_state.res_end_input,
-        'course': st.session_state.course_input,
+        'start_time': st.session_state.res_start_input,  # 'res_start' -> 'start_time' 키 이름 일치
+        'end_time': st.session_state.res_end_input,  # 'res_end' -> 'end_time' 키 이름 일치
+        'course_type': st.session_state.course_input,  # 'course' -> 'course_type' 키 이름 일치
         'order': st.session_state.order_input,
         'delay': st.session_state.delay_input,
         'test_mode': st.session_state.test_mode_checkbox,
