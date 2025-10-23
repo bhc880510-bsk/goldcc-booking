@@ -828,7 +828,7 @@ def check_queue_and_rerun():
 # 💡 UI 레이아웃 (PC/모바일 최적화 - 입력 상자 너비 조정)
 # -------------------------------------------------------------------------
 
-st.set_page_config(layout="wide")
+st.set_page_config(layout="wide",menu_items=None)
 
 # CSS: PC/모바일 환경 모두에서 입력 필드의 최대 폭을 제한하여 입력 상자 길이를 짧게 만듭니다.
 st.markdown("""
@@ -851,9 +851,9 @@ st.markdown("""
 
     /* 폰트 크기 조정 (h1, h2, h3 대체) */
     .app-title {
-        font-size: 20px; 
+        font-size: 26px; 
         font-weight: bold; 
-        margin-top: -10px; /* 제목 상단 여백 줄이기 */
+        margin-top: 0px; /* 제목 상단 여백 줄이기 */
         margin-bottom: 5px;
     }
     .section-header {
@@ -862,9 +862,8 @@ st.markdown("""
         margin-top: 5px; 
         margin-bottom: 5px;
     }
-    .st-emotion-cache-1kyy013 { /* st.container의 패딩 줄이기 */
-        padding-top: 5px;
-        padding-bottom: 5px;
+    .st-emotion-cache-1kyy013, .st-emotion-cache-1gh2stx {
+        padding-top: 0rem !important; 
     }
     </style>
     """, unsafe_allow_html=True)
