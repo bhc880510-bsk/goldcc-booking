@@ -170,29 +170,36 @@ class APIBookingCore:
     # def extract_ms_num(self):
     #     ...
     #     return False
-
     def keep_session_alive(self, target_dt):
         """세션 유지를 위해 1분에 1회 서버에 접속 시도 (백그라운드 스레드에서 실행)"""
 
         # 예약 시작 시간 전까지만 세션 유지 시도
+        self.log_message("✅ 세션 유지 스레드 시작. 1분마다 세션 유지를 시도합니다.")
+
         while not self.stop_event.is_set() and datetime.datetime.now() < target_dt:
 
             # 🚨 1분에 1회 (60초)마다 세션 유지 시도
             time_to_sleep = 60.0
 
+            # 예약 정시(08:44:00)가 지난 경우 세션 유지 종료
+            current_time_dt = datetime.datetime.now().time()
+            if self.target_time and current_time_dt >= self.target_time:
+                self.log_message("✅ 세션 유지 스레드: 예약 정시 도달. 종료합니다.")
+                return
+
             try:
-                # 캘린더 조회 API는 가볍고 세션 유지를 위한 용도로 적합합니다.
-                # 참고: date는 오늘 날짜로 임의 설정
-                current_date = datetime.date.today().strftime('%Y%m%d')
-                if self.check_booking_open_by_calendar(current_date):
-                    self.log_message("💚 [세션 유지] 성공적으로 세션 유지 신호를 서버에 보냈습니다.")
-                else:
-                    self.log_message("⚠️ [세션 유지] 신호 전송 실패 또는 예약 정보 확인 실패.")
+                # 로그인 페이지 GET 요청
+                self.session.get("https://www.gakorea.com/join/login.asp", timeout=5, verify=False,
+                                 proxies=self.proxies)
+
+                # 🚨 수정됨: 인자 하나만 전달
+                self.log_message("💚 [세션 유지] 세션 유지 요청 완료.")
 
             except Exception as e:
+                # 🚨 수정됨: 인자 하나만 전달
                 self.log_message(f"❌ [세션 유지] 통신 오류 발생: {e}")
 
-            # 다음 시도까지 대기
+                # 다음 시도까지 대기
             i = 0
             while i < time_to_sleep and not self.stop_event.is_set() and datetime.datetime.now() < target_dt:
                 time.sleep(1)  # 1초씩 짧게 쉬면서 중단 신호 확인
