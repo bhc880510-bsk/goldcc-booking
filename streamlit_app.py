@@ -923,10 +923,10 @@ with st.container(border=True):
 
     with col6:
         st.text_input("시작시간", key="res_start_input", label_visibility="visible")
-        st.selectbox("코스선택", ["All", "참피온", "마스타"], key="course_input", label_visibility="visible")
+        st.text_input("종료시간", key="res_end_input", label_visibility="visible")
 
     with col7:
-        st.text_input("종료시간", key="res_end_input", label_visibility="visible")
+        st.selectbox("코스선택", ["All", "참피온", "마스타"], key="course_input", label_visibility="visible")
         st.selectbox("예약순서", ["순차(▲)", "역순(▼)"], key="order_input", label_visibility="visible")
 
     with col8:
