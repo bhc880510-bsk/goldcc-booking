@@ -107,10 +107,10 @@ class APIBookingCore:
         self.course_detail_mapping = {
             "A": "참피온OUT", "B": "참피온IN", "C": "마스타OUT", "D": "마스타IN"
         }
-        # 🚨 msNum을 빈 문자열로 초기화
-        self.ms_num = ""
-        # 🚨 Lock 추가: msNum 추출을 단일 스레드로 직렬화하기 위함
-        self.ms_num_lock = threading.Lock()
+        self.ms_num = ""  # 🚨 하드코딩 제거, 빈 문자열로 초기화
+        self.ms_num_lock = threading.Lock()  # 🚨 Lock 추가 (멀티스레드 충돌 방지)
+        self.proxies = None  # 🚨 프록시 오류 제거 (None으로 설정)
+        self.log_message("⚠️ 프록시를 사용하지 않습니다.")
 
     def log_message(self, msg):
         self.log_message_func(msg, self.message_queue)
@@ -282,7 +282,6 @@ class APIBookingCore:
         return all_fetched_times
 
         # _fetch_tee_list 함수 (약 400번째 줄 근처)
-
     def _fetch_tee_list(self, date, cos, max_retries=2):
         """단일 코스의 티 리스트 조회 (Thread Pool 내부에서 사용)"""
         url = "https://www.gakorea.com/controller/ReservationController.asp"
@@ -292,32 +291,30 @@ class APIBookingCore:
             "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
             "X-Requested-With": "XMLHttpRequest",
             "Origin": "https://www.gakorea.com",
-            # 모바일 예약 페이지 Referer 사용
-            "Referer": "https://www.gakorea.com/mobile/reservation/golf/reservation.asp",
+            # Referer는 웹 달력 페이지로 고정
+            "Referer": "https://www.gakorea.com/reservation/golf/reservation.asp",
             "Connection": "keep-alive"
         }
 
-        # --- 🚨 msNum 확보 로직 (Lock 사용 & main.asp 제거) ---
+        # --- 🚨 msNum 확보 로직 (Lock 사용 & 순수 웹 도메인 적용) ---
         if not self.ms_num:
-            # 🚨 Lock 획득: msNum 추출은 하나의 스레드만 진행하도록 보장
             with self.ms_num_lock:
-                # Lock을 획득한 후, 다른 스레드가 먼저 msNum을 채웠는지 다시 확인
                 if self.ms_num:
                     self.log_message("✅ msNum은 이미 다른 스레드에 의해 확보됨. 통과.")
                     pass
                 else:
-                    self.log_message("⚠️ msNum 값이 없어 (멀티스레드 동시 접근 방지 후) 추출 시도 중...")
+                    self.log_message("⚠️ msNum 값이 없어 (순수 웹 도메인에서) 추출 시도 중...")
                     try:
-                        # 🚨 main.asp 로직이 제거되었음을 확인!
+                        # 🚨 예약 페이지 HTML 로드 (순수 웹 도메인)
+                        target_url = "https://www.gakorea.com/reservation/golf/reservation.asp"
 
-                        # 2. 예약 페이지 HTML 로드 (msNum 추출 목적) - PC에서 성공했던 방식
-                        target_url = "https://www.gakorea.com/mobile/reservation/golf/reservation.asp"
-                        self.log_message(f"🔎 예약 페이지({target_url}) 재로드 후 msNum 추출 시도...")
-                        # 🚨 404가 나지 않도록 주의 깊게 재시도
+                        self.log_message(f"🔎 예약 페이지(웹 도메인: {target_url}) 재로드 후 msNum 추출 시도...")
+
+                        # 프록시 없음
                         res = self.session.get(target_url, headers=headers, timeout=15, verify=False)
                         res.raise_for_status()
 
-                        # 강화된 정규 표현식으로 추출 시도 (10자리 이상 숫자)
+                        # 강화된 정규 표현식으로 추출 시도
                         match = re.search(r'msNum\s*[:=]\s*["\']?(\d{10,})["\']?', res.text, re.IGNORECASE)
 
                         if match:
@@ -332,11 +329,14 @@ class APIBookingCore:
                         return []
         # ----------------------------------------------
 
+        # msNum 확보가 실패하면 빈 배열 반환
+        if not self.ms_num:
+            return []
+
         part = "1" if cos in ["A", "C"] else "2"
-        # 🚨 self.ms_num을 사용
         payload = {
             "method": "getTeeList", "coDiv": "611", "date": date, "cos": cos, "part": part,
-            "msNum": self.ms_num, "msDivision": "10", "msClass": "01", "msLevel": "00"
+            "msNum": self.ms_num, "msDivision": "10", "msClass": "01", "msLevel": "00"  # 🚨 동적으로 확보된 msNum 사용
         }
         for attempt in range(max_retries):
             if self.stop_event.is_set(): return []
