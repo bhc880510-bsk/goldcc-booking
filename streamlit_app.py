@@ -314,29 +314,54 @@ class APIBookingCore:
                     pass
                 else:
                     self.log_message("⚠️ msNum 값이 없어 (순수 웹 도메인에서) 추출 시도 중...")
-                    try:
-                        # 🚨 예약 페이지 HTML 로드 (순수 웹 도메인)
-                        target_url = "https://www.gakorea.com/reservation/golf/reservation.asp"
 
-                        self.log_message(f"🔎 예약 페이지(웹 도메인: {target_url}) 재로드 후 msNum 추출 시도...")
+                    # 🚨 5회 시도 루프 시작
+                    for attempt in range(5):
+                        try:
+                            target_url = "https://www.gakorea.com/reservation/golf/reservation.asp"
+                            self.log_message(
+                                f"🔎 예약 페이지(웹 도메인: {target_url}) 재로드 후 msNum 추출 시도... (시도 {attempt + 1}/5)")
 
-                        # 프록시 없음
-                        res = self.session.get(target_url, headers=headers, timeout=15, verify=False)
-                        res.raise_for_status()
+                            # 프록시 설정 (프록시가 있다면 사용)
+                            res = self.session.get(target_url, headers=headers, timeout=15, verify=False,
+                                                   proxies=self.proxies)
+                            res.raise_for_status()
 
-                        # 강화된 정규 표현식으로 추출 시도
-                        match = re.search(r'msNum\s*[:=]\s*["\']?(\d{10,})["\']?', res.text, re.IGNORECASE)
+                            # 🚨 [추가]: HTML 내용 전체를 로그로 출력하여 진단
+                            if attempt == 0:
+                                # HTML이 너무 길기 때문에, 첫 번째 시도에서만 전체 HTML을 로그로 남깁니다.
+                                self.log_message(
+                                    f"ℹ️ [진단용] 받은 HTML 전체 내용:\n{res.text[:2000]}... [전체 길이: {len(res.text)}]")
 
-                        if match:
-                            self.ms_num = match.group(1)
-                            self.log_message(f"✅ msNum 추출 성공: {self.ms_num} (최종 확보)")
-                        else:
-                            self.log_message(f"❌ msNum 추출 재시도 실패. (HTML 길이: {len(res.text)})")
-                            return []
+                            # 강화된 정규 표현식으로 추출 시도
+                            match = re.search(
+                                r'(?:msNum|ms_num)\s*[:=]\s*["\']?(\d{10,})["\']?',
+                                res.text,
+                                re.IGNORECASE | re.DOTALL
+                            )
 
-                    except requests.RequestException as e:
-                        self.log_message(f"❌ msNum 추출을 위한 네트워크 오류: {e}. 예약을 중단합니다.")
-                        return []
+                            if match:
+                                self.ms_num = match.group(1)
+                                self.log_message(f"✅ msNum 추출 성공: {self.ms_num} (최종 확보)")
+                                # 루프 탈출
+                                break
+                            else:
+                                self.log_message(f"❌ msNum 추출 재시도 실패. (HTML 길이: {len(res.text)})")
+                                time.sleep(0.5)  # 잠시 대기 후 재시도
+                                continue  # 다음 시도
+
+                        except requests.RequestException as e:
+                            self.log_message(f"❌ msNum 추출을 위한 네트워크 오류: {e}. 재시도합니다.")
+                            time.sleep(1)
+                            continue
+                        except Exception as e:
+                            self.log_message(f"💥 [심각] msNum 추출 중 예상치 못한 오류 발생: {type(e).__name__} - {e}. 재시도합니다.")
+                            time.sleep(1)
+                            continue
+
+                    # 🚨 5회 시도 모두 실패 시 예약 중단
+                    self.log_message("🛑 5회 시도 후 msNum 추출 실패. 예약을 중단합니다.")
+                    return []
         # ----------------------------------------------
 
         # msNum 확보가 실패하면 빈 배열 반환
