@@ -3,8 +3,4 @@ requests
 ujson
 pytz
 urllib3
-threading
-queue
-sys
-traceback
-re
+
