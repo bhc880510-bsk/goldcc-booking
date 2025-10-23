@@ -828,33 +828,44 @@ def check_queue_and_rerun():
 # 💡 UI 레이아웃 (PC/모바일 최적화 - 입력 상자 너비 조정)
 # -------------------------------------------------------------------------
 
-st.set_page_config(layout="wide",menu_items=None)
+st.set_page_config(
+    layout="wide",
+    menu_items=None
+)
 
 # CSS: PC/모바일 환경 모두에서 입력 필드의 최대 폭을 제한하여 입력 상자 길이를 짧게 만듭니다.
 st.markdown("""
     <style>
-    /* 🚨 변경: 입력 필드 (text_input, date_input, selectbox 등)의 최대 너비를 200px로 제한 */
-    /* stDateInput은 Streamlit의 내부 요소이므로 함께 조정합니다. */
+    /* 🚨🚨🚨 1. 상단 간격 완전 제거 (최고 우선순위) 🚨🚨🚨 */
+    /* stAppViewContainer의 섹션과 그 아래 VerticalBlock의 마진/패딩 제거 */
+    div[data-testid="stAppViewContainer"] > section,
+    div[data-testid="stVerticalBlock"] {
+        margin-top: 0px !important;
+        padding-top: 0px !important;
+    }
+
+    /* Streamlit 페이지 본문의 최상단 패딩 제거 (기존 캐시 클래스 포함) */
+    .st-emotion-cache-1kyy013, .st-emotion-cache-1gh2stx, .main > div {
+        padding-top: 0rem !important; 
+    }
+
+    /* 🚨🚨🚨 2. 타이틀 글씨 크기 및 마진 설정 🚨🚨🚨 */
+    .app-title {
+        font-size: 24px !important; /* !important로 우선순위 확보 */
+        font-weight: bold; 
+        margin-top: 0px !important;  /* 상단 마진도 0으로 강제 */
+        margin-bottom: 5px;
+    }
+
+    /* 3. 기타 UI 요소 너비/여백 설정 유지 */
     div.stText, div.stDateInput, div.stSelectbox {
         max-width: 200px !important; 
     }
-
-    /* 입력 상자를 둘러싼 부모 요소의 너비도 제한하여 전체 너비 조정에 도움을 줍니다. */
     div[data-testid="stTextInput"], div[data-testid="stDateInput"], div[data-testid="stSelectbox"] {
         max-width: 200px !important;
     }
-
-    /* ID/PW 입력 상자는 2분할을 유지하되, 전체 컨테이너 너비를 제한합니다. */
     div[data-testid="stVerticalBlock"] > div:nth-child(1) > div:nth-child(1) > div {
-        max-width: 420px; /* ID/PW 컨테이너 너비 제한 (200px + 200px + 마진) */
-    }
-
-    /* 폰트 크기 조정 (h1, h2, h3 대체) */
-    .app-title {
-        font-size: 26px; 
-        font-weight: bold; 
-        margin-top: 0px; /* 제목 상단 여백 줄이기 */
-        margin-bottom: 5px;
+        max-width: 420px;
     }
     .section-header {
         font-size: 16px; 
@@ -862,14 +873,11 @@ st.markdown("""
         margin-top: 5px; 
         margin-bottom: 5px;
     }
-    .st-emotion-cache-1kyy013, .st-emotion-cache-1gh2stx {
-        padding-top: 0rem !important; 
-    }
     </style>
     """, unsafe_allow_html=True)
 
 # 폰트 크기 축소 적용
-st.markdown('<p class="app-title">⛳ 골드CC 모바일 예약</p>', unsafe_allow_html=True)
+st.markdown('<p class="app-title" style="font-size: 24px !important; margin-top: 0px !important;">⛳ 골드CC 모바일 예약</p>', unsafe_allow_html=True)
 
 # --- 1. 설정 섹션 ---
 with st.container(border=True):
