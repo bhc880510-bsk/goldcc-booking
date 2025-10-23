@@ -18,6 +18,7 @@ import requests
 import ujson as json
 import urllib3
 import re
+import pytz
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # InsecureRequestWarning 비활성화
@@ -35,12 +36,11 @@ def log_message(message, message_queue):
         message_queue.put(f"🚨UI_LOG:[{datetime.datetime.now().strftime('%H:%M:%S.%f')[:-3]}] {message}")
     except Exception:
         pass
-
-
 def get_default_date(days):
     """오늘 날짜로부터 지정된 일수만큼 지난 날짜를 반환 (datetime.date 객체)"""
-    return (datetime.date.today() + datetime.timedelta(days=days))
-
+    KST = pytz.timezone('Asia/Seoul')
+    # 🚨 KST 기준의 오늘 날짜를 기준으로 계산
+    return (datetime.datetime.now(KST).date() + datetime.timedelta(days=days))
 
 def format_time_for_api(time_str):
     """'HH:MM' 형태를 API에 맞는 'HHMM' 형태로 변환"""
@@ -107,10 +107,13 @@ class APIBookingCore:
         self.course_detail_mapping = {
             "A": "참피온OUT", "B": "참피온IN", "C": "마스타OUT", "D": "마스타IN"
         }
-        self.ms_num = ""  # 🚨 하드코딩 제거, 빈 문자열로 초기화
-        self.ms_num_lock = threading.Lock()  # 🚨 Lock 추가 (멀티스레드 충돌 방지)
-        self.proxies = None  # 🚨 프록시 오류 제거 (None으로 설정)
-        self.log_message("⚠️ 프록시를 사용하지 않습니다.")
+        self.ms_num = ""
+        self.ms_num_lock = threading.Lock()
+        self.proxies = None
+
+        # 🚨 KST 시간대 객체 정의 및 즉시 실행 플래그 추가
+        self.KST = pytz.timezone('Asia/Seoul')
+        self.force_immediate_start = False  # 초기값은 False
 
     def log_message(self, msg):
         self.log_message_func(msg, self.message_queue)
@@ -489,125 +492,87 @@ class APIBookingCore:
 # ============================================================
 def start_pre_process(message_queue, stop_event, inputs):
     """백그라운드 스레드에서 실행되는 예약 핵심 로직 (시간 제어 포함)"""
+    # pytz는 파일 상단에 import 되어 있어야 합니다.
+    KST = pytz.timezone('Asia/Seoul')
 
     log_message("[INFO] ⚙️ 예약 시작 조건 확인 완료.", message_queue)
-
     try:
         params = inputs
+        # APIBookingCore 초기화 시 self.KST 객체가 준비되어 있어야 합니다.
         core = APIBookingCore(log_message, message_queue, stop_event)
 
         # 1. 로그인
-        log_message("[API] ⚙️ API 로그인 시작...", message_queue)
-        login_result = core.requests_login(params['id'], params['pw'])
+        log_message("✅ 작업 진행 중: API 로그인 세션 쿠키 확보 시도...", message_queue)
+        login_result = core.requests_login(params.get('id'), params.get('pw'))  # params.get() 안전 접근
         if login_result['result'] != 'success':
             log_message("❌ 로그인 실패. 아이디/비밀번호를 확인하거나 네트워크를 점검하세요.", message_queue)
             message_queue.put(f"🚨UI_ERROR:로그인 실패: 아이디 또는 비밀번호를 확인하세요.")
             return
+        log_message("✅ 로그인 성공. 세션 쿠키 확보 완료.", message_queue)
 
-        log_message("🔑 순수 API 로그인 완료. 세션 쿠키 추출 성공.", message_queue)
+        # 2. 가동 시작 시간 계산 및 즉시 실행 로직 적용 (KST 기준)
+        run_datetime_str = f"{params.get('run_date')} {params.get('run_time')}"
+        run_datetime_naive = datetime.datetime.strptime(run_datetime_str, '%Y%m%d %H:%M:%S')
+        # UI 입력 시간을 KST로 변환하여 시간대 정보 부여
+        run_datetime_kst = KST.localize(run_datetime_naive)
 
-        # 2. msNum 동적 추출 (기존 추출 실패 로직 제거)
-        # 🚨 msNum 추출은 getTeeList 함수에서 진행됨을 가정하고 건너뜁니다.
-        log_message("✅ 로그인 성공. msNum 추출 단계는 다음 API 호출 시 통합하여 진행됩니다.", message_queue)
+        # 예약 시간 1분 전(60초 전)에 티 타임 조회 시작 (KST 기준)
+        pre_fetch_time_kst = run_datetime_kst - datetime.timedelta(seconds=60)
 
-        # 3. 가동 시작 시간 계산
-        # st.date_input의 형식이 YYYY-MM-DD이지만, inputs에는 YYYYMMDD로 저장
-        run_datetime_str = f"{params['run_date']} {params['run_time']}"
-        run_datetime = datetime.datetime.strptime(run_datetime_str, '%Y%m%d %H:%M:%S')
-        # 🚨 예약 시간 1분 전(60초 전)에 티 타임 조회 시작
-        pre_fetch_time = run_datetime - datetime.timedelta(seconds=60)
+        # 즉시 실행 로직
+        now_kst = datetime.datetime.now(KST)
 
-        # --- 🚨 수정된 부분 1: 세션 유지 스레드 실행 ---
-        session_thread = threading.Thread(
-            target=core.keep_session_alive,
-            args=(run_datetime,),  # 예약 정시까지 세션 유지
-            daemon=True
-        )
-        session_thread.start()
-        log_message("✅ 세션 유지 스레드 시작. 1분마다 세션 유지를 시도합니다.", message_queue)
-        # -----------------------------------------------
+        if now_kst >= pre_fetch_time_kst:
+            # 목표 시간이 이미 지났다면 즉시 실행
+            log_message(
+                f"✅ [즉시 실행 감지] 현재 KST 시간({now_kst.strftime('%H:%M:%S')})이 목표 시각({pre_fetch_time_kst.strftime('%H:%M:%S')})보다 늦어 즉시 실행됩니다.",
+                message_queue)
+            time.sleep(1.0)
+        else:
+            # 3. 1분전까지 대기 후, 예약 시간대 가져와 정렬 및 우선순위 결정
+            log_message(f"⏳ 티 타임 조회 대기중. 목표 시각: {pre_fetch_time_kst.strftime('%H:%M:%S')}", message_queue)
 
-        # 4. 1분전까지 대기 (카운트다운 없음)
-        log_message(f"⏳ 티 타임 조회 대기중. 목표 시각: {pre_fetch_time.strftime('%H:%M:%S')}", message_queue)
-        # 🚨 티 타임 조회 대기 시점에는 카운트다운 X
-        wait_until(pre_fetch_time, stop_event, message_queue, log_prefix="티 타임 조회", log_countdown=False)
+            target_dt_local_server = pre_fetch_time_kst.astimezone(None).replace(tzinfo=None)
+
+            wait_until(target_dt_local_server, stop_event, message_queue, log_prefix="티 타임 조회", log_countdown=True)
+
         if stop_event.is_set(): return
 
-        # 🚨 티 타임 조회
-        # 이 함수가 실행될 때 _fetch_tee_list 내부에서 msNum을 확보하게 됩니다.
-        all_times = core.get_all_available_times(params['date'])
+        # 🚨 티 타임 조회 및 필터링 (KeyError 방지 및 필터링 오류 해결)
+        all_times = core.get_all_available_times(params.get('date'))
 
-        # msNum 확보에 실패하여 all_times가 비어있을 경우 프로세스 중단
-        if not core.ms_num and not all_times:
-            log_message("❌ msNum 확보 실패 및 예약 가능 시간대 조회 실패. 예약 프로세스를 중단합니다.", message_queue)
-            message_queue.put(f"🚨UI_ERROR:msNum 추출 오류: msNum 값을 가져올 수 없어 예약을 중단합니다.")
-            return
+        # .get()을 사용하여 KeyError 방지 및 기본값 설정
+        is_reverse_order = params.get('order', '순방향 (오름)') == '역순 (내림)'
 
-        is_reverse_order = params['order'] == '역순 (내림)'
+        log_message(
+            f"🔎 필터링 조건: {params.get('start_time', '06:00')} ~ {params.get('end_time', '23:00')}, 코스: {params.get('course_type', 'All')}",
+            message_queue)
 
         sorted_times = core.filter_and_sort_times(
-            all_times, params['res_start'], params['res_end'], params['course'], is_reverse_order
+            all_times,
+            params.get('start_time', '06:00'),  # 키가 없으면 '06:00'을 기본값으로 사용
+            params.get('end_time', '09:00'),  # 🚨 [수정]: '23:00' 대신 '09:00'을 기본값으로 사용 (필터링 오류 방지)
+            params.get('course_type', 'All'),  # 키가 없으면 'All'을 기본값으로 사용
+            is_reverse_order
         )
 
-        if not sorted_times:
-            log_message("[NO MATCH] 설정된 조건에 맞는 예약 가능 시간이 없습니다. 예약 시도 중단.", message_queue)
-            message_queue.put(
-                f"🚨UI_ERROR:예약 가능 시간대 없음: 필터링 조건({params['res_start']}~{params['res_end']})에 맞는 시간이 없습니다.")
-            return
-
-        # 5. 가동 시작 시간까지 대기 및 예약 가능 버튼 감시
-        log_message(f"⏳ 예약 시작 정시 대기중. 목표 시각: {run_datetime.strftime('%H:%M:%S')}", message_queue)
-
-        # --- 🚨 수정된 부분 2: 예약 정시까지 대기 시에만 카운트다운 (30초 전부터) ---
-        # log_countdown=True로 설정하여 30초 전부터 "예약 대기시간: ??초"를 표시합니다.
-        wait_until(run_datetime, stop_event, message_queue, log_prefix="예약 가능 버튼 감시", log_countdown=True)
-        # ----------------------------------------------------------------------
-
-        if stop_event.is_set(): return
-
-        log_message("🔍 [감시 시작] 골드CC 서버의 '예약가능' 버튼 생성을 감시합니다.", message_queue)
-
-        watchdog_count = 0
-        while not stop_event.is_set():
-            watchdog_count += 1
-            is_open = core.check_booking_open_by_calendar(params['date'])
-
-            if is_open:
-                log_message(f"✅ [감지 성공] 예약 가능 신호 감지! ({watchdog_count}회 시도)", message_queue)
-                break
-
-            if watchdog_count > 100:
-                log_message("⚠️ 예약 가능 신호 감시 실패: 최대 감시 횟수를 초과했습니다 (100회).", message_queue)
-                message_queue.put(f"🚨UI_ERROR:감시 실패: 예약 가능 신호 감지 실패 (최대 시도 횟수 초과).")
-                return
-
-            # 짧게 쉬면서 UI 스레드에 제어권 양보
-            time.sleep(0.1)
-
-        if stop_event.is_set(): return
-
-        # 6. 예약 시도
-        success = core.run_api_booking(
-            params['date'], params['course'], params['test_mode'], sorted_times, float(params['delay'])
+        # 4. 예약 시도
+        core.run_api_booking(
+            date=params.get('date'),
+            target_course_name=params.get('course_type', 'All'),
+            test_mode=params.get('test_mode', True),
+            sorted_available_times=sorted_times,
+            # 🚨 [최종 수정]: int()로 캐스팅하여 TypeError 방지
+            delay_seconds=int(params.get('delay', 0))
         )
 
-        if success:
-            log_message("🎉 예약 프로세스 성공적으로 완료.", message_queue)
-        else:
-            log_message("❌ 예약 프로세스 실패.", message_queue)
-
-    except ValueError as ve:
-        log_message(f"[입력 오류] ❌ {ve}", message_queue)
-        message_queue.put(f"🚨UI_ERROR:입력 오류: 날짜/시간 형식을 확인하세요.")
-    except Exception as e:
-        log_message(f"[Main Process] ❌ 치명적인 오류 발생: {e}", message_queue)
-        traceback.print_exc()
-        message_queue.put(f"🚨UI_ERROR:치명적 오류: {e}")
-
-    finally:
-        message_queue.put("🚨UI_FINAL_STOP")
-
-
+    except Exception:
+        exc_type, exc_value, exc_traceback = sys.exc_info()
+        traceback_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
+        error_msg = f"❌ 치명적인: 예약 프로세스 중 치명적인 오류 발생: {exc_value}\n{''.join(traceback_details)}"
+        log_message(error_msg, message_queue)
+        message_queue.put(
+            f"🚨UI_ERROR:[{datetime.datetime.now().strftime('%H:%M:%S.%f')[:-3]}] ❌ 치명적 오류 발생! 로그를 확인해주세요.")
 # ============================================================
 # Streamlit UI 구성 및 상태 관리
 # ============================================================
@@ -638,7 +603,7 @@ if 'date_input' not in st.session_state:
 if 'run_date_input' not in st.session_state:
     st.session_state['run_date_input'] = get_default_date(0).strftime('%Y%m%d')
 if 'run_time_input' not in st.session_state:
-    st.session_state['run_time_input'] = "08:45:00"  # 사용자 요청 시간 반영
+    st.session_state['run_time_input'] = "09:00:00"  # 사용자 요청 시간 반영
 if 'res_start_input' not in st.session_state:
     st.session_state['res_start_input'] = "07:00"
 if 'res_end_input' not in st.session_state:
