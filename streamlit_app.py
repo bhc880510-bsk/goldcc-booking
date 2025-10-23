@@ -645,6 +645,16 @@ def start_pre_process(message_queue, stop_event, inputs):
 # ============================================================
 
 # 🚨 세션 상태 초기화 및 기본값 설정
+# ============================================================
+# Streamlit UI 구성 및 상태 관리
+# ============================================================
+
+# 🚨 세션 상태 초기화 및 기본값 설정
+# ============================================================
+# Streamlit UI 구성 및 상태 관리
+# ============================================================
+
+# 🚨 세션 상태 초기화 및 기본값 설정
 if 'log_messages' not in st.session_state:
     st.session_state.log_messages = ["프로그램 실행 준비 완료."]
 if 'is_running' not in st.session_state:
@@ -819,49 +829,64 @@ def check_queue_and_rerun():
 
 
 # -------------------------------------------------------------------------
-# UI 레이아웃
+# UI 레이아웃 (세로 길이 최소화)
 # -------------------------------------------------------------------------
 
 st.set_page_config(layout="wide")
 st.title("⛳ 골드CC 모바일 예약")
 
 # --- 1. 설정 섹션 ---
-with st.container(height=500, border=True):
+with st.container(border=True):  # height=500 제거하여 높이 자동 조절
     st.subheader("🔑 로그인 및 조건 설정")
 
+    # 1-1. 로그인 섹션 (2열 압축)
     col1, col2 = st.columns(2)
     with col1:
-        st.text_input("아이디", key="id_input")
+        st.text_input("아이디", key="id_input", label_visibility="visible")  # label_visibility="visible" 추가 (기본값)
     with col2:
-        st.text_input("비밀번호", type="password", key="pw_input")
+        st.text_input("비밀번호", type="password", key="pw_input", label_visibility="visible")
 
+    # 1-2. 예약 및 가동 조건 (3열로 최대한 압축)
     st.markdown("---")
+    st.subheader("🗓️ 예약/가동 시간 설정")
 
-    # 🗓️ 예약 및 가동 조건
-    col3, col4 = st.columns([0.7, 0.3])
+    # 예약 목표일, 가동 시작일, 가동 시작 시간을 3열로 배치
+    col3, col4, col5 = st.columns(3)
+
     with col3:
+        # st.date_input은 높이가 높아, label을 짧게 변경
         st.date_input(
             "예약 목표일",
             key="date_input",
-            format="YYYY-MM-DD"
+            format="YYYY-MM-DD",
+            label_visibility="visible"
         )
+
     with col4:
-        st.text_input("가동 시작일 (YYYYMMDD)", key="run_date_input")
-        st.text_input("가동 시작 시각 (HH:MM:SS)", key="run_time_input")
+        # 가동 시작일
+        st.text_input("가동 시작일 (YYYYMMDD)", key="run_date_input", help="스크립트가 실행될 목표일", label_visibility="visible")
 
-    st.markdown("---")
-
-    # 🕒 시간 범위 필터 및 코스 설정
-    col5, col6, col7 = st.columns(3)
     with col5:
-        st.text_input("예약 시작시간 (HH:MM)", key="res_start_input")
-        st.selectbox("코스", ["All", "참피온", "마스타"], key="course_input")
+        # 가동 시작 시각
+        st.text_input("가동 시작 시각 (HH:MM:SS)", key="run_time_input", help="스크립트가 실행될 목표 시각", label_visibility="visible")
+
+    # 1-3. 필터 및 코스 설정 (3열 압축)
+    st.markdown("---")
+    st.subheader("⚙️ 티타임 필터 및 우선순위")
+    col6, col7, col8 = st.columns(3)
+
     with col6:
-        st.text_input("예약 종료시간 (HH:MM)", key="res_end_input")
-        st.selectbox("우선순위", ["순차 (오름)", "역순 (내림)"], key="order_input")
+        st.text_input("시작시간 (HH:MM)", key="res_start_input", label_visibility="visible")
+        st.selectbox("코스", ["All", "참피온", "마스타"], key="course_input", label_visibility="visible")
+
     with col7:
-        st.text_input("예약 지연시간 (초)", key="delay_input", help="예약 가능 신호 감지 후 예약 시도 지연 시간")
-        st.checkbox("테스트 모드 (실제 예약 안함)", key="test_mode_checkbox")
+        st.text_input("종료시간 (HH:MM)", key="res_end_input", label_visibility="visible")
+        st.selectbox("우선순위", ["순차 (오름)", "역순 (내림)"], key="order_input", label_visibility="visible")
+
+    with col8:
+        # 지연시간과 테스트 모드는 세로로 배치 (한 필드만 남아서)
+        st.text_input("예약 지연 (초)", key="delay_input", help="예약 가능 신호 감지 후 예약 시도 지연 시간", label_visibility="visible")
+        st.checkbox("테스트 모드", key="test_mode_checkbox", help="체크 시 실제 예약 API 호출을 건너뜁니다.")
 
 # --- 2. 실행 버튼 섹션 ---
 st.markdown("---")
@@ -892,7 +917,8 @@ if st.session_state.log_container_placeholder is None:
     st.session_state.log_container_placeholder = st.empty()
 
 # 로그 메시지 출력 (가장 최근 메시지가 위로 오도록 역순 출력)
-with st.session_state.log_container_placeholder.container(height=250):
+# 로그 창 높이를 300px로 증가시켜 시인성 개선
+with st.session_state.log_container_placeholder.container(height=300):
     # 로그가 너무 길어지는 것을 방지하기 위해 최근 500줄만 표시
     for msg in reversed(st.session_state.log_messages[-500:]):
 
