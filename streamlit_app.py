@@ -11,7 +11,7 @@ import urllib3
 import re
 import pytz
 from concurrent.futures import ThreadPoolExecutor, as_completed
-
+st.set_page_config(page_title="골드CC 예약")
 # InsecureRequestWarning 비활성화
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
