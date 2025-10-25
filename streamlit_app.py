@@ -1,12 +1,3 @@
-import warnings
-
-# RuntimeWarning: coroutine '...' was never awaited 경고를 무시하도록 설정 (경고 제거)
-warnings.filterwarnings(
-    "ignore",
-    message="coroutine '.*' was never awaited",
-    category=RuntimeWarning
-)
-
 import streamlit as st
 import datetime
 import threading
@@ -544,7 +535,9 @@ def start_pre_process(message_queue, stop_event, inputs):
         log_message("✅ 로그인 및 msNum 확보 성공.", message_queue)
 
         # 2. 가동 시작 시간 (KST) 계산
-        run_datetime_str = f"{params.get('run_date')} {params.get('run_time')}"
+        # UI에서 run_date는 datetime.date 객체로 들어오므로, strftime('%Y%m%d')로 변환 필요
+        run_date_str = params.get('run_date')
+        run_datetime_str = f"{run_date_str} {params.get('run_time')}"
         run_datetime_naive = datetime.datetime.strptime(run_datetime_str, '%Y%m%d %H:%M:%S')
         # UI 입력 시간을 KST로 변환하여 시간대 정보 부여 (예약 정시)
         run_datetime_kst = KST.localize(run_datetime_naive)
@@ -559,7 +552,7 @@ def start_pre_process(message_queue, stop_event, inputs):
         session_thread.start()
         log_message("✅ 세션 유지 스레드 백그라운드에서 시작됨 (1분마다 서버 접속 시도).", message_queue)
 
-        # 3. 티 타임 조회 시작 시점 (KST 기준, 예약 정시 60초 전)
+        # 3. 티 타임 조회 시작 시점 (KST) 계산
         pre_fetch_start_kst = run_datetime_kst - datetime.timedelta(seconds=60)
 
         # 4. 예약 시도 대기 시작 시점 (KST 기준, 예약 정시 30초 전)
@@ -587,15 +580,16 @@ def start_pre_process(message_queue, stop_event, inputs):
         log_message("🔎 티 타임 조회 시작: 서버에서 예약 가능한 시간대를 가져옵니다.", message_queue)
         all_times = core.get_all_available_times(params.get('date'))
 
-        is_reverse_order = params.get('order', '순방향 (오름)') == '역순 (내림)'
+        # UI에서 order_input의 값이 변경됨에 따라 조건 변경
+        is_reverse_order = params.get('order', '순차(▲)') == '역순(▼)'
 
         log_message(
-            f"🔎 필터링 조건: {params.get('start_time', '06:00')} ~ {params.get('end_time', '09:00')}, 코스: {params.get('course_type', 'All')}",
+            f"🔎 필터링 조건: {params.get('start_time', '07:00')} ~ {params.get('end_time', '09:00')}, 코스: {params.get('course_type', 'All')}",
             message_queue)
 
         sorted_times = core.filter_and_sort_times(
             all_times,
-            params.get('start_time', '06:00'),
+            params.get('start_time', '07:00'),
             params.get('end_time', '09:00'),
             params.get('course_type', 'All'),
             is_reverse_order
@@ -651,6 +645,23 @@ def start_pre_process(message_queue, stop_event, inputs):
 # ============================================================
 
 # 🚨 세션 상태 초기화 및 기본값 설정
+# ============================================================
+# Streamlit UI 구성 및 상태 관리
+# ============================================================
+
+# 🚨 세션 상태 초기화 및 기본값 설정
+# ============================================================
+# Streamlit UI 구성 및 상태 관리
+# ============================================================
+
+# 🚨 세션 상태 초기화 및 기본값 설정
+# ... (기존 코드 유지)
+# ============================================================
+# Streamlit UI 구성 및 상태 관리
+# ============================================================
+
+# 🚨 세션 상태 초기화 및 기본값 설정
+# ... (기존 코드 유지)
 if 'log_messages' not in st.session_state:
     st.session_state.log_messages = ["프로그램 실행 준비 완료."]
 if 'is_running' not in st.session_state:
@@ -668,6 +679,7 @@ if 'run_id' not in st.session_state:
 
 # --- UI 입력 필드 초기화 (사용자 편의를 위한 기본값) ---
 # KST 기준의 오늘 날짜로 get_default_date가 이미 설정됨
+# ... (기존 코드 유지)
 if 'id_input' not in st.session_state:
     st.session_state['id_input'] = ""
 if 'pw_input' not in st.session_state:
@@ -685,7 +697,7 @@ if 'res_end_input' not in st.session_state:
 if 'course_input' not in st.session_state:
     st.session_state['course_input'] = "All"
 if 'order_input' not in st.session_state:
-    st.session_state['order_input'] = "역순 (내림)"
+    st.session_state['order_input'] = "역순(▼)"
 if 'delay_input' not in st.session_state:
     st.session_state['delay_input'] = "0"
 if 'test_mode_checkbox' not in st.session_state:
@@ -695,6 +707,7 @@ if 'log_container_placeholder' not in st.session_state:
 
 
 def stop_booking():
+# ... (기존 코드 유지)
     """메인 스레드에서 호출되어 UI를 업데이트하고 스레드를 중단시킵니다."""
     if not st.session_state.is_running: return
     # 스레드에 중단 신호 전달
@@ -702,10 +715,11 @@ def stop_booking():
     st.session_state.stop_event.set()
     st.session_state.is_running = False
     st.session_state['run_id'] = None  # 실행 ID 초기화
-    st.rerun()
+    #st.rerun()
 
 
 def run_booking():
+# ... (기존 코드 유지)
     """'예약 시작' 버튼 핸들러 - 스레드 시작 및 실시간 업데이트 루프 실행"""
     if st.session_state.is_running:
         st.error("⚠️ 이미 예약 스레드가 실행 중입니다.")
@@ -760,10 +774,11 @@ def run_booking():
     st.session_state.booking_thread.start()
 
     # 메인 루프를 탈출하여 UI가 멈추지 않도록 합니다. (로그 업데이트를 위해 즉시 rerun)
-    st.rerun()
+    #st.rerun()
 
 
 def check_queue_and_rerun():
+# ... (기존 코드 유지)
     """
     메인 스레드에서 실행되며, Queue를 감시하고 새 메시지가 있을 때마다
     UI를 업데이트(rerun)합니다.
@@ -833,7 +848,15 @@ st.set_page_config(
     menu_items=None
 )
 
-# CSS: PC/모바일 환경 모두에서 입력 필드의 최대 폭을 제한하여 입력 상자 길이를 짧게 만듭니다.
+# 🚨 st.selectbox 사용을 위한 시간 옵션 리스트 정의 (06:00 ~ 12:00)
+# '가동시작시간'은 HH:MM:SS 형식이므로 08:00:00 ~ 12:00:00 까지 15분 간격으로 생성
+run_time_options = [f"{h:02}:{m:02}:00" for h in range(8, 13) for m in range(0, 60,60) if h != 12 or m == 0]
+#run_time_options = [f"{h:02}:{m:02}:00" for h in range(8, 13) for m in range(0, 60, 15) if h != 12 or m == 0]
+# '시작시간/종료시간'은 HH:MM 형식이므로 06:00 ~ 12:00 까지 15분 간격으로 생성
+res_time_options = [f"{h:02}:{m:02}" for h in range(6, 16) for m in range(0, 60,60) if h != 12 or m == 0]
+#res_time_options = [f"{h:02}:{m:02}" for h in range(6, 13) for m in range(0, 60, 15) if h != 12 or m == 0]
+
+# CSS: PC/모바일 환경 모두에서 입력 필드의 최대 폭을 제한하고, 타이틀 중앙 정렬 및 크기를 조정합니다.
 st.markdown("""
     <style>
     /* 🚨🚨🚨 1. 상단 간격 완전 제거 (최고 우선순위) 🚨🚨🚨 */
@@ -849,12 +872,13 @@ st.markdown("""
         padding-top: 0rem !important; 
     }
 
-    /* 🚨🚨🚨 2. 타이틀 글씨 크기 및 마진 설정 🚨🚨🚨 */
+    /* 🚨🚨🚨 2. 타이틀 글씨 크기 및 중앙 정렬 (요청 사항) 🚨🚨🚨 */
     .app-title {
-        font-size: 24px !important; /* !important로 우선순위 확보 */
+        font-size: 26px !important; /* 요청: 26px 크기로 설정 */
         font-weight: bold; 
-        margin-top: 0px !important;  /* 상단 마진도 0으로 강제 */
+        margin-top: 0px !important;  
         margin-bottom: 5px;
+        text-align: center; /* 요청: 중앙에 위치 */
     }
 
     /* 3. 기타 UI 요소 너비/여백 설정 유지 */
@@ -876,8 +900,8 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# 폰트 크기 축소 적용
-st.markdown('<p class="app-title" style="font-size: 24px !important; margin-top: 0px !important;">⛳ 골드CC 모바일 예약</p>', unsafe_allow_html=True)
+# 폰트 크기 및 중앙 정렬 적용
+st.markdown('<p class="app-title">⛳ 골드CC 모바일 예약</p>', unsafe_allow_html=True)
 
 # --- 1. 설정 섹션 ---
 with st.container(border=True):
@@ -912,7 +936,14 @@ with st.container(border=True):
 
     with col5:
         # 가동 시작 시각
-        st.text_input("가동시작시간", key="run_time_input", help="HH:MM:SS", label_visibility="visible")
+        # 🚨 [수정] st.selectbox로 변경하고 index 인수를 제거하여 경고를 해소합니다.
+        st.selectbox(
+            "가동시작시간",
+            run_time_options, # 08:00:00 ~ 12:00:00
+            # index=... 인수를 제거하여 Session State의 'run_time_input' 값이 기본값으로 사용되도록 함
+            key="run_time_input",
+            label_visibility="visible"
+        )
 
     # 1-3. 필터 및 코스 설정 (3열 압축)
     st.markdown("---")
@@ -922,8 +953,22 @@ with st.container(border=True):
     col6, col7, col8 = st.columns([2.5, 2.5, 1])
 
     with col6:
-        st.text_input("시작시간", key="res_start_input", label_visibility="visible")
-        st.text_input("종료시간", key="res_end_input", label_visibility="visible")
+        # 🚨 [수정] st.selectbox로 변경하고 index 인수를 제거하여 경고를 해소합니다.
+        st.selectbox(
+            "시작시간",
+            res_time_options, # 06:00 ~ 12:00
+            # index=... 인수를 제거하여 Session State의 'res_start_input' 값이 기본값으로 사용되도록 함
+            key="res_start_input",
+            label_visibility="visible"
+        )
+        # 🚨 [수정] st.selectbox로 변경하고 index 인수를 제거하여 경고를 해소합니다.
+        st.selectbox(
+            "종료시간",
+            res_time_options, # 06:00 ~ 12:00
+            # index=... 인수를 제거하여 Session State의 'res_end_input' 값이 기본값으로 사용되도록 함
+            key="res_end_input",
+            label_visibility="visible"
+        )
 
     with col7:
         st.selectbox("코스선택", ["All", "참피온", "마스타"], key="course_input", label_visibility="visible")
@@ -937,7 +982,8 @@ with st.container(border=True):
 
 # --- 2. 실행 버튼 섹션 ---
 st.markdown("---")
-col_start, col_stop = st.columns(2)
+# 🚨 [수정] 버튼을 가로로 배치하기 위해 col_start, col_stop을 동일 비율의 2열로 변경
+col_start, col_stop, _ = st.columns([1, 1, 4]) # 4는 버튼 외 여백 확보
 
 with col_start:
     st.button(
@@ -948,8 +994,9 @@ with col_start:
     )
 
 with col_stop:
+    # 🚨 [수정] 버튼 텍스트를 '취소'로 변경하고, 기존 중단 함수(stop_booking)를 연결
     st.button(
-        "🛑 중단",
+        "❌ 취소",
         on_click=stop_booking,
         disabled=not st.session_state.is_running,
         type="secondary"
