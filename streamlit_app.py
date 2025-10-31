@@ -441,8 +441,8 @@ class APIBookingCore:
 
         for attempt in range(max_retries):
             if self.stop_event.is_set(): return False
-            try:
-                res = self.session.post(url, headers=headers, data=payload, timeout=5.0, verify=False)
+            try:  #예약시도 신호 보내고 대기하는 시간 (5초 => 3초)
+                res = self.session.post(url, headers=headers, data=payload, timeout=3.0, verify=False)
                 res.raise_for_status()
                 data = json.loads(res.text)
 
@@ -1042,3 +1042,4 @@ with st.session_state.log_container_placeholder.container(height=250):
 
 # 실시간 업데이트를 위한 Queue 감시 함수 호출
 check_queue_and_rerun()
+
