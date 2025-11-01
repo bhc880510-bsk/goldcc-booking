@@ -1,4 +1,9 @@
 import streamlit as st
+st.set_page_config(
+    page_title="골드CC 모바일 예약", # 원하는 앱 제목으로 변경
+    page_icon="⛳", # 이모지(Emoji)를 사용하거나 아래처럼 이미지 파일을 사용합니다.
+    layout="wide", # 앱의 기본 레이아웃을 넓게 설정 (선택 사항)
+)
 import datetime
 import threading
 import time
@@ -1042,4 +1047,5 @@ with st.session_state.log_container_placeholder.container(height=250):
 
 # 실시간 업데이트를 위한 Queue 감시 함수 호출
 check_queue_and_rerun()
+
 
