@@ -198,7 +198,14 @@ class APIBookingCore:
             return False
 
     def run_api_booking(self, date, test_mode, sorted_times, delay):
-        """예약 시도 실행 로직"""
+        """예약 시도 실행 로직 (상위 순위 목록 표시 추가)"""
+
+        # [추가] 예약 시도 전, 상위 3순위 목록을 로그에 먼저 표시
+        targets = sorted_times[:3]
+        if targets:
+            self.log_message(
+                f"📋 예약 타겟: " + ", ".join([f"[{i + 1}]{format_time_for_display(t[0])}" for i, t in enumerate(targets)]))
+
         if delay > 0:
             self.log_message(f"⏳ 예약 지연 {delay}초 대기 중...")
             time.sleep(delay)
@@ -217,11 +224,14 @@ class APIBookingCore:
                 self.log_message(f"🎉🎉🎉 예약 성공!!! {c_nm} {disp_t} 🎉🎉🎉")
                 return True
 
+            # [추가] 실패 시 다음 순위가 있다면 로그 표시
+            elif i < 4 and i < len(sorted_times) - 1:
+                self.log_message(f"⚠️ {i + 1}순위 실패, 다음 순위로 넘어갑니다.")
+
         return False
 
-
 # ============================================================
-# Main Processing Logic
+# Main Processing Logic (수정됨)
 # ============================================================
 def start_pre_process(message_queue, stop_event, inputs):
     try:
@@ -265,11 +275,10 @@ def start_pre_process(message_queue, stop_event, inputs):
         log_message(f"✅ 총 {len(filtered)}개의 예약 가능 타임 확보.", message_queue)
         log_message(f"📜 1순위 타겟: {format_time_for_display(filtered[0][0])} ({filtered[0][3]})", message_queue)
 
-        # 6. 예약 오픈 감지 (이미 티가 조회되었다면 즉시 실행)
+        # 6. 예약 오픈 감지
         log_message("🚀 예약 오픈 감지 시작...", message_queue)
         start_wait = time.monotonic()
         while not stop_event.is_set() and (time.monotonic() - start_wait < 420):
-            # 캘린더에 오픈 신호가 떴거나, 혹은 필터링된 티 리스트가 이미 존재하면 즉시 예약 시도
             if core.check_booking_open_by_calendar(inputs['date']) or len(filtered) > 0:
                 log_message("🎉 예약 신호 감지 성공! 즉시 예약을 시작합니다.", message_queue)
                 core.run_api_booking(inputs['date'], inputs['test_mode'], filtered, int(inputs['delay']))
@@ -279,10 +288,13 @@ def start_pre_process(message_queue, stop_event, inputs):
     except Exception as e:
         log_message(f"❌ 치명적 오류: {str(e)}", message_queue)
         message_queue.put("🚨UI_ERROR:작업 중 오류 발생")
+    finally:
+        # 핵심 추가: 작업이 정상 종료되든 오류가 나든 UI에 종료를 알림
+        message_queue.put("🚨UI_FINISH:")
 
 
 # ============================================================
-# Streamlit UI
+# Streamlit UI (로직 보완)
 # ============================================================
 
 # 세션 상태 초기화
@@ -305,9 +317,7 @@ with st.container(border=True):
     c3, c4, c5 = st.columns(3)
     date_in = c3.date_input("예약희망일", value=get_default_date(28))
     run_date_in = c4.text_input("가동시작일(YYYYMMDD)", value=datetime.datetime.now(KST).strftime('%Y%m%d'))
-    # 리스트 생성 부분
-    times = [f"{h:02}:{m:02}:00" for h in range(8, 19) for m in [0, 10, 20, 30, 40, 50]]
-    # selectbox 하나만 딱 사용!
+    times = [f"{h:02}:{m:02}:00" for h in range(8, 20) for m in [0, 10, 20, 30, 40, 50]]
     run_time_in = c5.selectbox("가동시작시간", times, index=times.index("09:00:00"))
 
     st.markdown("---")
@@ -342,13 +352,15 @@ if bc1.button("🚀 예약 시작", type="primary", disabled=st.session_state.is
 if bc2.button("❌ 취소", disabled=not st.session_state.is_running):
     st.session_state.stop_event.set()
     st.session_state.is_running = False
+    st.rerun() # 취소 시에도 즉각 반영
 
 # 로그 영역
 st.markdown("---")
 st.markdown("**📝 실행 로그**")
 log_container = st.container(height=300)
 
-# 실시간 로그 업데이트 루프
+# 실시간 로그 업데이트 루프 (수정됨)
+processed_finish = False
 while True:
     try:
         msg = st.session_state.message_queue.get_nowait()
@@ -357,6 +369,11 @@ while True:
         elif msg.startswith("🚨UI_ERROR:"):
             st.session_state.log_messages.append(f"❌ {msg.replace('🚨UI_ERROR:', '')}")
             st.session_state.is_running = False
+            processed_finish = True
+        elif msg.startswith("🚨UI_FINISH:"):
+            # 종료 신호를 받으면 is_running을 해제하고 루프를 탈출하여 rerun 실행
+            st.session_state.is_running = False
+            processed_finish = True
     except queue.Empty:
         break
 
@@ -365,6 +382,10 @@ with log_container:
         color = "green" if "🎉" in m or "✅" in m else "red" if "❌" in m or "⚠️" in m else "black"
         st.markdown(f'<p style="font-size:12px; margin:0; color:{color}; font-family:monospace;">{m}</p>',
                     unsafe_allow_html=True)
+
+# 작업 종료 신호를 받았다면 화면을 다시 그려 버튼을 활성화
+if processed_finish:
+    st.rerun()
 
 if st.session_state.is_running:
     time.sleep(0.1)
