@@ -305,7 +305,10 @@ with st.container(border=True):
     c3, c4, c5 = st.columns(3)
     date_in = c3.date_input("예약희망일", value=get_default_date(28))
     run_date_in = c4.text_input("가동시작일(YYYYMMDD)", value=datetime.datetime.now(KST).strftime('%Y%m%d'))
-    run_time_in = c5.selectbox("가동시작시간", [f"{h:02}:{m:02}:00" for h in range(8, 19) for m in [0, 10, 20, 30, 40, 50]])
+    # 리스트 생성 부분
+    times = [f"{h:02}:{m:02}:00" for h in range(8, 19) for m in [0, 10, 20, 30, 40, 50]]
+    # selectbox 하나만 딱 사용!
+    run_time_in = c5.selectbox("가동시작시간", times, index=times.index("09:00:00"))
 
     st.markdown("---")
     c6, c7, c8 = st.columns([2, 2, 1])
