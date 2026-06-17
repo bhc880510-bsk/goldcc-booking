@@ -323,8 +323,12 @@ with st.container(border=True):
     st.markdown("---")
     c6, c7, c8 = st.columns([2, 2, 1])
     with c6:
-        s_t = st.selectbox("조회 시작", [f"{h:02}:00" for h in range(6, 16)], index=1)
-        e_t = st.selectbox("조회 종료", [f"{h:02}:00" for h in range(6, 16)], index=3)
+        # ---- 수정된 부분 시작 ----
+        time_list = [f"{h:02}:{m:02}" for h in range(6, 15) for m in (0, 30) if not (h == 14 and m == 30)]
+        s_t = st.selectbox("조회 시작", time_list, index=3) # 07:30 디폴트 설정 (인덱스 3)
+        e_t = st.selectbox("조회 종료", time_list, index=6) # 09:00 디폴트 설정
+#        e_t = st.selectbox("조회 종료", time_list, index=len(time_list)-1) # 13:00 디폴트 설정
+        # ---- 수정된 부분 끝 ----
     with c7:
         crs = st.selectbox("코스", ["All", "참피온", "마스타"])
         ordr = st.selectbox("순서", ["순차(▲)", "역순(▼)"], index=1)
