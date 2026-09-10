@@ -149,12 +149,36 @@ class APIBookingCore:
             return False
 
     def get_all_available_times(self, date):
-        """모든 코스 티타임 조회 (멀티스레드)"""
+        """모든 코스 티타임 조회 (멀티스레드) - 티타임이 나타날 때까지 지속 재조회"""
+        attempt = 0
         all_times = []
-        with ThreadPoolExecutor(max_workers=4) as executor:
-            futures = [executor.submit(self._fetch_tee_list, date, cos) for cos in ["A", "B", "C", "D"]]
-            for future in as_completed(futures):
-                all_times.extend(future.result())
+        while not self.stop_event.is_set():
+            attempt += 1
+            if attempt == 1:
+                self.log_message(f"⏳ {date} 예약 가능 시간대 확보 중 (API 지속 조회 시작)...")
+
+            temp_times = []
+            with ThreadPoolExecutor(max_workers=4) as executor:
+                futures = [executor.submit(self._fetch_tee_list, date, cos) for cos in ["A", "B", "C", "D"]]
+                for future in as_completed(futures):
+                    temp_times.extend(future.result())
+
+            unique_map = {}
+            for t in temp_times:
+                key = (t[0], t[1], t[2])
+                if key not in unique_map:
+                    unique_map[key] = t
+
+            all_times = list(unique_map.values())
+
+            # 티타임 데이터가 반환되면 루프 탈출
+            if len(all_times) > 0:
+                self.log_message(f"✅ 총 {len(all_times)}개의 예약 가능 시간대 확보 완료 ({attempt}회차 시도 성공).")
+                break
+
+            # 아직 티타임이 열리지 않은 경우 0.1초 후 재시도
+            time.sleep(0.1)
+
         return all_times
 
     def _fetch_tee_list(self, date, cos):
@@ -172,7 +196,8 @@ class APIBookingCore:
                 (t['BK_TIME'], t['BK_COS'], t['BK_PART'], self.course_detail_mapping.get(cos, 'Unknown'), "611")
                 for t in data.get('rows', [])
             ]
-            self.log_message(f"🔍 getTeeList 완료 (cos={cos}): {len(times)}개 시간대")
+            if len(times) > 0:
+                self.log_message(f"🔍 getTeeList 완료 (cos={cos}): {len(times)}개 시간대")
             return times
         except Exception:
             return []
@@ -231,7 +256,7 @@ class APIBookingCore:
         return False
 
 # ============================================================
-# Main Processing Logic (수정됨)
+# Main Processing Logic
 # ============================================================
 def start_pre_process(message_queue, stop_event, inputs):
     try:
@@ -257,7 +282,7 @@ def start_pre_process(message_queue, stop_event, inputs):
 
         if stop_event.is_set(): return
 
-        # 5. 티 타임 조회 및 필터링
+        # 5. 티 타임 조회 및 필터링 (티타임이 나타날 때까지 내부에 반복 루프 작동)
         log_message("🔎 티 타임 조회 시작...", message_queue)
         all_times = core.get_all_available_times(inputs['date'])
 
@@ -275,7 +300,7 @@ def start_pre_process(message_queue, stop_event, inputs):
         log_message(f"✅ 총 {len(filtered)}개의 예약 가능 타임 확보.", message_queue)
         log_message(f"📜 1순위 타겟: {format_time_for_display(filtered[0][0])} ({filtered[0][3]})", message_queue)
 
-        # 6. 예약 오픈 감지
+        # 6. 예약 오픈 감지 및 예약 실행
         log_message("🚀 예약 오픈 감지 시작...", message_queue)
         start_wait = time.monotonic()
         while not stop_event.is_set() and (time.monotonic() - start_wait < 420):
@@ -289,12 +314,11 @@ def start_pre_process(message_queue, stop_event, inputs):
         log_message(f"❌ 치명적 오류: {str(e)}", message_queue)
         message_queue.put("🚨UI_ERROR:작업 중 오류 발생")
     finally:
-        # 핵심 추가: 작업이 정상 종료되든 오류가 나든 UI에 종료를 알림
         message_queue.put("🚨UI_FINISH:")
 
 
 # ============================================================
-# Streamlit UI (로직 보완)
+# Streamlit UI
 # ============================================================
 
 # 세션 상태 초기화
@@ -323,12 +347,9 @@ with st.container(border=True):
     st.markdown("---")
     c6, c7, c8 = st.columns([2, 2, 1])
     with c6:
-        # ---- 수정된 부분 시작 ----
         time_list = [f"{h:02}:{m:02}" for h in range(6, 15) for m in (0, 30) if not (h == 14 and m == 30)]
         s_t = st.selectbox("조회 시작", time_list, index=3) # 07:30 디폴트 설정 (인덱스 3)
         e_t = st.selectbox("조회 종료", time_list, index=6) # 09:00 디폴트 설정
-#        e_t = st.selectbox("조회 종료", time_list, index=len(time_list)-1) # 13:00 디폴트 설정
-        # ---- 수정된 부분 끝 ----
     with c7:
         crs = st.selectbox("코스", ["All", "참피온", "마스타"])
         ordr = st.selectbox("순서", ["순차(▲)", "역순(▼)"], index=1)
@@ -356,14 +377,14 @@ if bc1.button("🚀 예약 시작", type="primary", disabled=st.session_state.is
 if bc2.button("❌ 취소", disabled=not st.session_state.is_running):
     st.session_state.stop_event.set()
     st.session_state.is_running = False
-    st.rerun() # 취소 시에도 즉각 반영
+    st.rerun()
 
 # 로그 영역
 st.markdown("---")
 st.markdown("**📝 실행 로그**")
 log_container = st.container(height=300)
 
-# 실시간 로그 업데이트 루프 (수정됨)
+# 실시간 로그 업데이트 루프
 processed_finish = False
 while True:
     try:
@@ -375,7 +396,6 @@ while True:
             st.session_state.is_running = False
             processed_finish = True
         elif msg.startswith("🚨UI_FINISH:"):
-            # 종료 신호를 받으면 is_running을 해제하고 루프를 탈출하여 rerun 실행
             st.session_state.is_running = False
             processed_finish = True
     except queue.Empty:
@@ -387,7 +407,6 @@ with log_container:
         st.markdown(f'<p style="font-size:12px; margin:0; color:{color}; font-family:monospace;">{m}</p>',
                     unsafe_allow_html=True)
 
-# 작업 종료 신호를 받았다면 화면을 다시 그려 버튼을 활성화
 if processed_finish:
     st.rerun()
 
