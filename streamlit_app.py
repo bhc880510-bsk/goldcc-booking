@@ -19,6 +19,11 @@ import urllib3
 import re
 import pytz
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
 
 # InsecureRequestWarning 비활성화
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -88,43 +93,31 @@ def wait_until(target_dt_kst, stop_event, message_queue, log_prefix="프로그�
 
 
 # ============================================================
-# API Booking Core Class
+# API Booking Core Class (PC 버전과 동일한 세션/쿠키 방식 연동)
 # ============================================================
 class APIBookingCore:
-    def __init__(self, log_func, message_queue, stop_event):
+    def __init__(self, session_cookies, msNum_value, log_func, message_queue, stop_event):
         self.log_message_func = log_func
         self.message_queue = message_queue
         self.stop_event = stop_event
         self.session = requests.Session()
+        self.session.cookies.update(session_cookies)
+        self.ms_num = msNum_value
+
         self.course_detail_mapping = {
             "A": "참피온OUT", "B": "참피온IN", "C": "마스타OUT", "D": "마스타IN"
         }
-        self.ms_num = ""
         self.KST = pytz.timezone('Asia/Seoul')
 
     def log_message(self, msg):
         self.log_message_func(msg, self.message_queue)
-
-    def requests_login(self, usrid, usrpass):
-        """API 로그인 및 msNum 추출"""
-        login_url = "https://www.gakorea.com/controller/MemberController.asp"
-        payload = {"method": "doLogin", "id": usrid, "pw": usrpass}
-        try:
-            res = self.session.post(login_url, data=payload, timeout=10, verify=False)
-            match = re.search(r'(?:msNum|ms_num)\s*[:=]\s*["\']?(\d{10,})["\']?', res.text, re.IGNORECASE)
-            if match:
-                self.ms_num = match.group(1)
-                return True
-        except Exception:
-            pass
-        return False
 
     def keep_session_alive(self, target_dt):
         """정해진 시간까지 1분마다 세션 유지 요청"""
         self.log_message("✅ 세션 유지 스레드 시작 (1분 주기).")
         while not self.stop_event.is_set() and datetime.datetime.now(self.KST) < target_dt:
             try:
-                self.session.get("https://www.gakorea.com/mobile/join/login.asp", timeout=5, verify=False)
+                self.session.get("https://www.gakorea.com/reservation/golf/reservation.asp", timeout=5, verify=False)
                 self.log_message("💚 [세션 유지] 서버 연결 확인 (1분주기).")
             except Exception:
                 pass
@@ -143,7 +136,6 @@ class APIBookingCore:
         }
         try:
             res = self.session.post(url, data=payload, timeout=3.0, verify=False)
-            # 해당 날짜 정보가 있고 OPENDAY가 설정되어 있는지 확인
             return date in res.text and '"OPENDAY":"99999999"' not in res.text
         except Exception:
             return False
@@ -171,12 +163,10 @@ class APIBookingCore:
 
             all_times = list(unique_map.values())
 
-            # 티타임 데이터가 반환되면 루프 탈출
             if len(all_times) > 0:
                 self.log_message(f"✅ 총 {len(all_times)}개의 예약 가능 시간대 확보 완료 ({attempt}회차 시도 성공).")
                 break
 
-            # 아직 티타임이 열리지 않은 경우 0.1초 후 재시도
             time.sleep(0.1)
 
         return all_times
@@ -223,9 +213,6 @@ class APIBookingCore:
             return False
 
     def run_api_booking(self, date, test_mode, sorted_times, delay):
-        """예약 시도 실행 로직 (상위 순위 목록 표시 추가)"""
-
-        # [추가] 예약 시도 전, 상위 3순위 목록을 로그에 먼저 표시
         targets = sorted_times[:3]
         if targets:
             self.log_message(
@@ -249,25 +236,68 @@ class APIBookingCore:
                 self.log_message(f"🎉🎉🎉 예약 성공!!! {c_nm} {disp_t} 🎉🎉🎉")
                 return True
 
-            # [추가] 실패 시 다음 순위가 있다면 로그 표시
             elif i < 4 and i < len(sorted_times) - 1:
                 self.log_message(f"⚠️ {i + 1}순위 실패, 다음 순위로 넘어갑니다.")
 
         return False
+
+
+# ============================================================
+# Selenium Login Helper (PC 버전 방식 도입)
+# ============================================================
+def selenium_login(usrid, usrpass, message_queue):
+    driver = None
+    try:
+        log_message("✅ 작업 진행 중: Selenium 브라우저 로그인 시도...", message_queue)
+        opts = Options()
+        opts.add_argument("--disable-blink-features=AutomationControlled")
+        # 서버 환경에 따라 headless가 필요할 수 있으나 로컬 테스트를 위해 일반 모드로 구동
+        driver = webdriver.Chrome(options=opts)
+
+        driver.get("https://www.gakorea.com/join/login.asp")
+        wait = WebDriverWait(driver, 20)
+        wait.until(EC.presence_of_element_located((By.ID, "txtId"))).send_keys(usrid)
+        driver.find_element(By.ID, "txtPw").send_keys(usrpass)
+        driver.find_element(By.XPATH, '//*[@id="contents"]/div/div/div/div/div[1]/a').click()
+        time.sleep(2)
+
+        session_cookies = {c['name']: c['value'] for c in driver.get_cookies()}
+        driver.get("https://www.gakorea.com/reservation/golf/reservation.asp")
+        time.sleep(1)
+
+        match = re.search(r'msNum[\'"]?\s*[:=]\s*[\'"]?(\d{10,})[\'"]?', driver.page_source)
+        api_msNum = match.group(1) if match else None
+
+        driver.quit()
+        driver = None
+
+        if api_msNum:
+            return session_cookies, api_msNum
+        else:
+            return None, None
+    except Exception as e:
+        log_message(f"❌ Selenium 로그인 오류: {str(e)}", message_queue)
+        if driver:
+            try:
+                driver.quit()
+            except:
+                pass
+        return None, None
+
 
 # ============================================================
 # Main Processing Logic
 # ============================================================
 def start_pre_process(message_queue, stop_event, inputs):
     try:
-        core = APIBookingCore(log_message, message_queue, stop_event)
-
-        # 1. 로그인
-        log_message("✅ 작업 진행 중: API 로그인 시도...", message_queue)
-        if not core.requests_login(inputs['id'], inputs['pw']):
-            message_queue.put("🚨UI_ERROR:로그인 실패: ID/PW를 확인하세요.")
+        # 1. Selenium을 이용한 안전한 로그인 및 쿠키/msNum 확보
+        session_cookies, api_msNum = selenium_login(inputs['id'], inputs['pw'], message_queue)
+        if not session_cookies or not api_msNum:
+            message_queue.put("🚨UI_ERROR:로그인 실패: ID/PW를 확인하거나 브라우저 상태를 체크하세요.")
             return
-        log_message("✅ 로그인 및 msNum 확보 성공.", message_queue)
+
+        log_message(f"✅ 로그인 성공! (msNum 확보 완료)", message_queue)
+        core = APIBookingCore(session_cookies, api_msNum, log_message, message_queue, stop_event)
 
         # 2. 시간 설정
         run_dt = KST.localize(
@@ -282,7 +312,7 @@ def start_pre_process(message_queue, stop_event, inputs):
 
         if stop_event.is_set(): return
 
-        # 5. 티 타임 조회 및 필터링 (티타임이 나타날 때까지 내부에 반복 루프 작동)
+        # 5. 티 타임 조회 및 필터링
         log_message("🔎 티 타임 조회 시작...", message_queue)
         all_times = core.get_all_available_times(inputs['date'])
 
@@ -321,13 +351,11 @@ def start_pre_process(message_queue, stop_event, inputs):
 # Streamlit UI
 # ============================================================
 
-# 세션 상태 초기화
 if 'log_messages' not in st.session_state: st.session_state.log_messages = ["프로그램 준비 완료."]
 if 'is_running' not in st.session_state: st.session_state.is_running = False
 if 'stop_event' not in st.session_state: st.session_state.stop_event = threading.Event()
 if 'message_queue' not in st.session_state: st.session_state.message_queue = queue.Queue()
 
-# UI 레이아웃
 st.markdown('<p style="font-size: 26px; font-weight: bold; text-align: center;">⛳ 골드CC 모바일 예약</p>',
             unsafe_allow_html=True)
 
@@ -348,8 +376,8 @@ with st.container(border=True):
     c6, c7, c8 = st.columns([2, 2, 1])
     with c6:
         time_list = [f"{h:02}:{m:02}" for h in range(6, 15) for m in (0, 30) if not (h == 14 and m == 30)]
-        s_t = st.selectbox("조회 시작", time_list, index=3) # 07:30 디폴트 설정 (인덱스 3)
-        e_t = st.selectbox("조회 종료", time_list, index=6) # 09:00 디폴트 설정
+        s_t = st.selectbox("조회 시작", time_list, index=3)
+        e_t = st.selectbox("조회 종료", time_list, index=6)
     with c7:
         crs = st.selectbox("코스", ["All", "참피온", "마스타"])
         ordr = st.selectbox("순서", ["순차(▲)", "역순(▼)"], index=1)
@@ -357,7 +385,6 @@ with st.container(border=True):
         dly = st.text_input("지연(초)", value="0")
         tst = st.checkbox("테스트", value=True)
 
-# 실행 버튼
 bc1, bc2, _ = st.columns([1, 1, 4])
 if bc1.button("🚀 예약 시작", type="primary", disabled=st.session_state.is_running):
     st.session_state.is_running = True
@@ -379,12 +406,10 @@ if bc2.button("❌ 취소", disabled=not st.session_state.is_running):
     st.session_state.is_running = False
     st.rerun()
 
-# 로그 영역
 st.markdown("---")
 st.markdown("**📝 실행 로그**")
 log_container = st.container(height=300)
 
-# 실시간 로그 업데이트 루프
 processed_finish = False
 while True:
     try:
