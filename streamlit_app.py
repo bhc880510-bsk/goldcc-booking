@@ -19,11 +19,6 @@ import urllib3
 import re
 import pytz
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
 
 # InsecureRequestWarning 비활성화
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -93,31 +88,75 @@ def wait_until(target_dt_kst, stop_event, message_queue, log_prefix="프로그�
 
 
 # ============================================================
-# API Booking Core Class (PC 버전과 동일한 세션/쿠키 방식 연동)
+# API Booking Core Class
 # ============================================================
 class APIBookingCore:
-    def __init__(self, session_cookies, msNum_value, log_func, message_queue, stop_event):
+    def __init__(self, log_func, message_queue, stop_event):
         self.log_message_func = log_func
         self.message_queue = message_queue
         self.stop_event = stop_event
         self.session = requests.Session()
-        self.session.cookies.update(session_cookies)
-        self.ms_num = msNum_value
+
+        # 브라우저 위장 헤더 추가
+        self.session.headers.update({
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",
+            "Accept": "application/json, text/javascript, */*; q=0.01",
+            "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+            "X-Requested-With": "XMLHttpRequest",
+            "Origin": "https://www.gakorea.com"
+        })
 
         self.course_detail_mapping = {
             "A": "참피온OUT", "B": "참피온IN", "C": "마스타OUT", "D": "마스타IN"
         }
+        self.ms_num = ""
         self.KST = pytz.timezone('Asia/Seoul')
 
     def log_message(self, msg):
         self.log_message_func(msg, self.message_queue)
+
+    def requests_login(self, usrid, usrpass):
+        """API 로그인 및 msNum 추출 (개선됨)"""
+        init_url = "https://www.gakorea.com/mobile/join/login.asp"
+        login_url = "https://www.gakorea.com/controller/MemberController.asp"
+
+        try:
+            # 1. 초기 세션 쿠키 확보
+            self.session.get(init_url, timeout=5, verify=False)
+            self.session.headers.update({"Referer": init_url})
+
+            # 2. 로그인 요청
+            payload = {"method": "doLogin", "id": usrid, "pw": usrpass}
+            res = self.session.post(login_url, data=payload, timeout=10, verify=False)
+
+            # 3. 응답 및 쿠키에서 msNum 탐색
+            match = re.search(r'(?:msNum|ms_num)\s*[:=]\s*["\']?(\d{10,})["\']?', res.text, re.IGNORECASE)
+            if match:
+                self.ms_num = match.group(1)
+                return True
+
+            if 'msNum' in self.session.cookies:
+                self.ms_num = self.session.cookies.get('msNum')
+                return True
+
+            # 4. 예비 접속을 통한 msNum 파싱
+            res_page = self.session.get("https://www.gakorea.com/reservation/golf/reservation.asp", timeout=5,
+                                        verify=False)
+            match_page = re.search(r'msNum[\'"]?\s*[:=]\s*[\'"]?(\d{10,})[\'"]?', res_page.text)
+            if match_page:
+                self.ms_num = match_page.group(1)
+                return True
+
+        except Exception:
+            pass
+        return False
 
     def keep_session_alive(self, target_dt):
         """정해진 시간까지 1분마다 세션 유지 요청"""
         self.log_message("✅ 세션 유지 스레드 시작 (1분 주기).")
         while not self.stop_event.is_set() and datetime.datetime.now(self.KST) < target_dt:
             try:
-                self.session.get("https://www.gakorea.com/reservation/golf/reservation.asp", timeout=5, verify=False)
+                self.session.get("https://www.gakorea.com/mobile/join/login.asp", timeout=5, verify=False)
                 self.log_message("💚 [세션 유지] 서버 연결 확인 (1분주기).")
             except Exception:
                 pass
@@ -141,13 +180,13 @@ class APIBookingCore:
             return False
 
     def get_all_available_times(self, date):
-        """모든 코스 티타임 조회 (멀티스레드) - 티타임이 나타날 때까지 지속 재조회"""
+        """티타임이 조회될 때까지 무한 반복하여 모든 코스 티타임 조회"""
         attempt = 0
         all_times = []
         while not self.stop_event.is_set():
             attempt += 1
-            if attempt == 1:
-                self.log_message(f"⏳ {date} 예약 가능 시간대 확보 중 (API 지속 조회 시작)...")
+            if attempt == 1 or attempt % 10 == 0:  # 너무 많은 로그 방지를 위해 10번마다 출력
+                self.log_message(f"⏳ {date} 예약 가능 시간대 확보 중 (시도 {attempt}회차)...")
 
             temp_times = []
             with ThreadPoolExecutor(max_workers=4) as executor:
@@ -155,6 +194,7 @@ class APIBookingCore:
                 for future in as_completed(futures):
                     temp_times.extend(future.result())
 
+            # 중복 제거 및 정렬
             unique_map = {}
             for t in temp_times:
                 key = (t[0], t[1], t[2])
@@ -163,16 +203,16 @@ class APIBookingCore:
 
             all_times = list(unique_map.values())
 
+            # 티타임이 하나라도 잡히면 루프 탈출
             if len(all_times) > 0:
-                self.log_message(f"✅ 총 {len(all_times)}개의 예약 가능 시간대 확보 완료 ({attempt}회차 시도 성공).")
+                self.log_message(f"✅ 총 {len(all_times)}개의 예약 가능 시간대 확보 완료! ({attempt}회차 시도 성공)")
                 break
 
             time.sleep(0.1)
 
         return all_times
-
     def _fetch_tee_list(self, date, cos):
-        """단일 코스 티 리스트 조회"""
+        """단일 코스 티 리스트 조회 - 원본 로직 유지"""
         url = "https://www.gakorea.com/controller/ReservationController.asp"
         part = "1" if cos in ["A", "C"] else "2"
         payload = {
@@ -186,8 +226,7 @@ class APIBookingCore:
                 (t['BK_TIME'], t['BK_COS'], t['BK_PART'], self.course_detail_mapping.get(cos, 'Unknown'), "611")
                 for t in data.get('rows', [])
             ]
-            if len(times) > 0:
-                self.log_message(f"🔍 getTeeList 완료 (cos={cos}): {len(times)}개 시간대")
+            self.log_message(f"🔍 getTeeList 완료 (cos={cos}): {len(times)}개 시간대")
             return times
         except Exception:
             return []
@@ -213,6 +252,7 @@ class APIBookingCore:
             return False
 
     def run_api_booking(self, date, test_mode, sorted_times, delay):
+        """예약 시도 실행 로직"""
         targets = sorted_times[:3]
         if targets:
             self.log_message(
@@ -243,76 +283,28 @@ class APIBookingCore:
 
 
 # ============================================================
-# Selenium Login Helper (PC 버전 방식 도입)
-# ============================================================
-def selenium_login(usrid, usrpass, message_queue):
-    driver = None
-    try:
-        log_message("✅ 작업 진행 중: Selenium 브라우저 로그인 시도...", message_queue)
-        opts = Options()
-        opts.add_argument("--disable-blink-features=AutomationControlled")
-        # 서버 환경에 따라 headless가 필요할 수 있으나 로컬 테스트를 위해 일반 모드로 구동
-        driver = webdriver.Chrome(options=opts)
-
-        driver.get("https://www.gakorea.com/join/login.asp")
-        wait = WebDriverWait(driver, 20)
-        wait.until(EC.presence_of_element_located((By.ID, "txtId"))).send_keys(usrid)
-        driver.find_element(By.ID, "txtPw").send_keys(usrpass)
-        driver.find_element(By.XPATH, '//*[@id="contents"]/div/div/div/div/div[1]/a').click()
-        time.sleep(2)
-
-        session_cookies = {c['name']: c['value'] for c in driver.get_cookies()}
-        driver.get("https://www.gakorea.com/reservation/golf/reservation.asp")
-        time.sleep(1)
-
-        match = re.search(r'msNum[\'"]?\s*[:=]\s*[\'"]?(\d{10,})[\'"]?', driver.page_source)
-        api_msNum = match.group(1) if match else None
-
-        driver.quit()
-        driver = None
-
-        if api_msNum:
-            return session_cookies, api_msNum
-        else:
-            return None, None
-    except Exception as e:
-        log_message(f"❌ Selenium 로그인 오류: {str(e)}", message_queue)
-        if driver:
-            try:
-                driver.quit()
-            except:
-                pass
-        return None, None
-
-
-# ============================================================
 # Main Processing Logic
 # ============================================================
 def start_pre_process(message_queue, stop_event, inputs):
     try:
-        # 1. Selenium을 이용한 안전한 로그인 및 쿠키/msNum 확보
-        session_cookies, api_msNum = selenium_login(inputs['id'], inputs['pw'], message_queue)
-        if not session_cookies or not api_msNum:
-            message_queue.put("🚨UI_ERROR:로그인 실패: ID/PW를 확인하거나 브라우저 상태를 체크하세요.")
+        core = APIBookingCore(log_message, message_queue, stop_event)
+
+        log_message("✅ 작업 진행 중: API 로그인 시도...", message_queue)
+        if not core.requests_login(inputs['id'], inputs['pw']):
+            message_queue.put("🚨UI_ERROR:로그인 실패: ID/PW를 확인하세요.")
             return
+        log_message(f"✅ 로그인 및 msNum 확보 성공. (msNum: {core.ms_num})", message_queue)
 
-        log_message(f"✅ 로그인 성공! (msNum 확보 완료)", message_queue)
-        core = APIBookingCore(session_cookies, api_msNum, log_message, message_queue, stop_event)
-
-        # 2. 시간 설정
         run_dt = KST.localize(
             datetime.datetime.strptime(f"{inputs['run_date']} {inputs['run_time']}", '%Y%m%d %H:%M:%S'))
 
-        # 3. 세션 유지 스레드 시작
         threading.Thread(target=core.keep_session_alive, args=(run_dt,), daemon=True).start()
 
-        # 4. 정시 대기 (30초 전부터 카운트다운)
         if datetime.datetime.now(KST) < run_dt:
             wait_until(run_dt, stop_event, message_queue, log_prefix="최종 예약 시도", log_countdown=True)
 
         if stop_event.is_set(): return
 
-        # 5. 티 타임 조회 및 필터링
         log_message("🔎 티 타임 조회 시작...", message_queue)
         all_times = core.get_all_available_times(inputs['date'])
 
@@ -330,7 +322,6 @@ def start_pre_process(message_queue, stop_event, inputs):
         log_message(f"✅ 총 {len(filtered)}개의 예약 가능 타임 확보.", message_queue)
         log_message(f"📜 1순위 타겟: {format_time_for_display(filtered[0][0])} ({filtered[0][3]})", message_queue)
 
-        # 6. 예약 오픈 감지 및 예약 실행
         log_message("🚀 예약 오픈 감지 시작...", message_queue)
         start_wait = time.monotonic()
         while not stop_event.is_set() and (time.monotonic() - start_wait < 420):
